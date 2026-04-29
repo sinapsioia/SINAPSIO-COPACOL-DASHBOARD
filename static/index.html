@@ -432,6 +432,11 @@
             <button type="submit">Validar archivo</button>
           </form>
           <pre id="importResult" class="import-result">Esperando archivo…</pre>
+          <div id="importConfirm" class="import-confirm">
+            <p id="importConfirmMsg">Validación exitosa. ¿Confirmar importación a Supabase?</p>
+            <small id="importConfirmDetail"></small>
+            <button id="confirmImportBtn" class="confirm-btn">Confirmar importación</button>
+          </div>
         </section>
       </main>
 
@@ -451,6 +456,97 @@
         <button id="shareAdvisorReport">Compartir</button>
       </div>
     </dialog>
+
+    <!-- Login overlay -->
+    <div id="loginOverlay" class="login-overlay hidden">
+      <div class="login-card">
+        <div class="login-brand">
+          <div class="login-logo">
+            <img src="/assets/copacol-logo.png" alt="COPACOL" />
+          </div>
+          <p class="login-title">COPACOL</p>
+          <p class="login-sub">Central de cobranzas</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <input id="loginEmail" type="email" placeholder="Correo electrónico" autocomplete="email" required />
+          <input id="loginPassword" type="password" placeholder="Contraseña" autocomplete="current-password" required />
+          <div id="loginError" class="login-error"></div>
+          <button type="submit" class="login-btn">Ingresar</button>
+        </form>
+        <p class="login-footer">SINAPSIO · Dashboard operativo</p>
+      </div>
+    </div>
+
+    <!-- Client drawer backdrop + panel -->
+    <div id="drawerBackdrop" class="drawer-backdrop" style="display:none"></div>
+    <aside id="clientDrawer" class="client-drawer" style="display:none">
+      <div class="drawer-header">
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div id="drawerAvatar" class="drawer-avatar">C</div>
+          <div>
+            <h2 id="drawerName" class="drawer-client-name">Cliente</h2>
+            <p id="drawerMeta" class="drawer-meta">NIT · Ciudad</p>
+          </div>
+        </div>
+        <button id="closeDrawer" class="drawer-close">×</button>
+      </div>
+      <div class="drawer-body" id="drawerBody">
+        <p class="drawer-empty">Cargando…</p>
+      </div>
+    </aside>
+
+    <!-- Contact registration modal -->
+    <dialog id="contactModal" class="contact-modal">
+      <div class="contact-modal-head">
+        <div>
+          <p class="eyebrow">Gestión de cobranza</p>
+          <h2 id="contactModalTitle">Registrar gestión</h2>
+        </div>
+        <button id="closeContactModal" class="icon-btn">×</button>
+      </div>
+      <div class="contact-modal-body">
+        <input type="hidden" id="contactNit" />
+        <div class="form-group">
+          <label for="contactTipo">Tipo de contacto</label>
+          <select id="contactTipo">
+            <option value="llamada">Llamada telefónica</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="visita">Visita presencial</option>
+            <option value="correo">Correo electrónico</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="contactResultado">Resultado</label>
+          <select id="contactResultado">
+            <option value="contactado">Contactado - sin acuerdo</option>
+            <option value="promesa">Promesa de pago</option>
+            <option value="pago_reportado">Reportó pago</option>
+            <option value="no_contesta">No contesta</option>
+            <option value="numero_errado">Número errado</option>
+            <option value="escalado">Escalado a gerencia</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="contactObs">Observación</label>
+          <textarea id="contactObs" placeholder="Descripción del contacto, acuerdos, próximo paso…"></textarea>
+        </div>
+        <div class="form-group" id="promesaGroup" style="display:none">
+          <label for="contactFechaPromesa">Fecha de promesa</label>
+          <input id="contactFechaPromesa" type="date" />
+        </div>
+        <div class="form-group" id="montoGroup" style="display:none">
+          <label for="contactMonto">Monto comprometido</label>
+          <input id="contactMonto" type="number" placeholder="0" min="0" step="1000" />
+        </div>
+      </div>
+      <div class="contact-modal-actions">
+        <button id="cancelContact" class="btn-secondary">Cancelar</button>
+        <button id="saveContact">Guardar gestión</button>
+      </div>
+    </dialog>
+
+    <!-- Import confirm section (injected inside carga page by JS) -->
 
     <button id="assistantFab" class="assistant-fab" title="Asistente virtual">AI</button>
     <aside id="assistantPanel" class="assistant-panel">

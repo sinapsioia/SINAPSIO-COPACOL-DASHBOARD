@@ -7,6 +7,7 @@ import re
 import tempfile
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -37,6 +38,10 @@ load_env()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+
+# In-memory cache for import previews pending confirmation
+IMPORT_CACHE: dict[str, dict] = {}
 
 
 def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | list) -> None:
@@ -315,6 +320,148 @@ def build_dashboard_payload() -> dict:
     }
 
 
+def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    body = json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": f"resolution=merge-duplicates,return=minimal",
+        },
+    )
+    req.add_unredirected_header("X-Upsert", "true")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.status
+
+
+def supabase_insert(table: str, row: dict) -> dict:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    body = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def build_client_payload(nit: str) -> dict:
+    params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "1"})
+    clients = supabase_get(
+        "copacol_clients",
+        f"select=*&{params}",
+    )
+    client = clients[0] if clients else {}
+
+    inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
+    invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
+
+    promise_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "20", "order": "created_at.desc"})
+    promises = supabase_get("copacol_promesas_pago", f"select=*&{promise_params}")
+
+    payment_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "20", "order": "created_at.desc"})
+    payments = supabase_get("copacol_pagos_reportados", f"select=*&{payment_params}")
+
+    contacts: list[dict] = []
+    try:
+        contact_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "30", "order": "created_at.desc"})
+        contacts = supabase_get("copacol_log_contactos", f"select=*&{contact_params}")
+    except Exception:
+        pass
+
+    return {
+        "client": client,
+        "invoices": invoices,
+        "promises": promises,
+        "payments": payments,
+        "contacts": contacts,
+    }
+
+
+def confirm_import(token: str) -> dict:
+    entry = IMPORT_CACHE.get(token)
+    if not entry:
+        raise ValueError("Token de importación inválido o expirado.")
+
+    records = entry["records"]
+    by_client = entry["by_client"]
+    fecha_corte = entry.get("fecha_corte") or datetime.now().date().isoformat()
+
+    # Map records to copacol_facturas columns
+    facturas_rows = [
+        {
+            "nit": r["cliente_nit"],
+            "numero_factura": r["documento"],
+            "monto": r["saldo"],
+            "vlr_mora": r["vlr_mora"],
+            "fecha_emision": r["fecha_emision"],
+            "fecha_vencimiento": r["fecha_vencimiento"],
+            "dias_mora": r["dias_mora"],
+            "condicion_pago": r.get("cuenta", ""),
+            "estado": "vigente" if r["dias_mora"] <= 0 else "vencido",
+            "fecha_corte": fecha_corte,
+        }
+        for r in records
+    ]
+
+    # Map clients to copacol_clients columns
+    client_rows = [
+        {
+            "nit": c["nit"],
+            "razon_social": c["razon_social"],
+            "ciudad": c.get("ciudad", ""),
+            "asesor_codigo": c.get("asesor_codigo", ""),
+            "asesor_nombre": c.get("asesor_nombre", ""),
+            "telefono": c.get("telefono_1", ""),
+            "telefono_2": c.get("telefono_2", ""),
+            "direccion": c.get("direccion", ""),
+            "total_saldo": c["saldo"],
+            "total_vencido": c.get("vencido", 0.0),
+            "total_vigente": c.get("vigente", 0.0),
+            "num_facturas": c["facturas"],
+            "num_vencidas": c["vencidas"],
+            "dias_mora_max": c["dias_mora_max"],
+            "fecha_corte": fecha_corte,
+        }
+        for c in by_client.values()
+    ]
+
+    # Upsert in batches of 500
+    def batch_upsert(table: str, rows: list[dict], conflict_col: str) -> None:
+        size = 500
+        for i in range(0, len(rows), size):
+            supabase_upsert(table, rows[i : i + size], conflict_col)
+
+    batch_upsert("copacol_facturas", facturas_rows, "numero_factura")
+    batch_upsert("copacol_clients", client_rows, "nit")
+
+    del IMPORT_CACHE[token]
+
+    return {
+        "status": "imported",
+        "facturas": len(facturas_rows),
+        "clientes": len(client_rows),
+        "fecha_corte": fecha_corte,
+        "message": f"Importación exitosa: {len(facturas_rows)} facturas y {len(client_rows)} clientes actualizados.",
+    }
+
+
 XLSX_NS = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
@@ -445,8 +592,35 @@ def parse_xlsx(path: Path) -> dict:
             cut_date = match.group(1).replace("/", "-")
             break
 
+    # Enrich by_client with extra fields needed for import
+    for r in records:
+        nit = r["cliente_nit"]
+        c = by_client[nit]
+        c.setdefault("ciudad", r["ciudad"])
+        c.setdefault("asesor_codigo", r["vendedor_codigo"])
+        c.setdefault("asesor_nombre", r["vendedor_nombre"])
+        c.setdefault("telefono_1", r["telefono_1"])
+        c.setdefault("telefono_2", r["telefono_2"])
+        c.setdefault("direccion", r["direccion"])
+        dias = r["dias_mora"]
+        if dias > 0:
+            c.setdefault("vencido", 0.0)
+            c["vencido"] = c.get("vencido", 0.0) + r["saldo"]
+        else:
+            c.setdefault("vigente", 0.0)
+            c["vigente"] = c.get("vigente", 0.0) + r["saldo"]
+
+    import_token = str(uuid.uuid4())
+    IMPORT_CACHE[import_token] = {
+        "records": records,
+        "by_client": by_client,
+        "fecha_corte": cut_date,
+        "created_at": datetime.now().isoformat(),
+    }
+
     return {
         "status": "preview",
+        "token": import_token,
         "fecha_corte_detectada": cut_date,
         "facturas": len(records),
         "clientes": len(by_client),
@@ -458,7 +632,7 @@ def parse_xlsx(path: Path) -> dict:
             {"vendedor": key, "saldo": value}
             for key, value in sorted(by_seller.items(), key=lambda item: item[1], reverse=True)[:10]
         ],
-        "message": "Validacion lista. La escritura en Supabase debe ejecutarse desde el backend de importacion confirmado para evitar reemplazos accidentales.",
+        "message": "Validación lista. Confirma para escribir en Supabase.",
     }
 
 
@@ -474,6 +648,19 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
             return
+
+        if parsed.path == "/api/config":
+            json_response(self, 200, {"supabase_url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY})
+            return
+
+        if parsed.path.startswith("/api/client/"):
+            nit = parsed.path[len("/api/client/"):]
+            if "/" not in nit:
+                try:
+                    json_response(self, 200, build_client_payload(nit))
+                except Exception as exc:
+                    json_response(self, 500, {"error": str(exc)})
+                return
 
         path = "index.html" if parsed.path in {"/", ""} else parsed.path.lstrip("/")
         file_path = (STATIC / path).resolve()
@@ -491,6 +678,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path == "/api/import/confirm":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                json_response(self, 200, confirm_import(data.get("token", "")))
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
+        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/contacto"):
+            nit = parsed.path[len("/api/client/"):-len("/contacto")]
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                row = {**data, "nit": nit, "created_at": data.get("created_at") or datetime.now().isoformat()}
+                result = supabase_insert("copacol_log_contactos", row)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
         if parsed.path != "/api/import/preview":
             json_response(self, 404, {"error": "Not found"})
             return

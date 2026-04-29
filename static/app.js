@@ -11,6 +11,9 @@ let dashboard = null;
 let tableMode = "all";
 let currentAdvisorReport = "";
 let currentPage = "tablero";
+let supabaseConfig = null;
+let importToken = null;
+let drawerNit = null;
 
 const agingLabels = {
   vigente: ["Vigente", "var(--green)"],
@@ -659,7 +662,7 @@ function clientCards(rows) {
       const phone = cleanPhone(client.telefono || client.telefono_2);
       const waText = encodeURIComponent(`Hola ${client.razon_social}, le contactamos de COPACOL sobre su estado de cartera.`);
       return `
-        <article class="client-card ${client.prioridad === "Alta" ? "hot" : ""}">
+        <article class="client-card ${client.prioridad === "Alta" ? "hot" : ""}" data-nit="${client.nit}">
           <div class="client-top">
             <strong>${client.razon_social || "Cliente sin nombre"}</strong>
             <span class="tag">${client.prioridad || "Normal"}</span>
@@ -674,7 +677,7 @@ function clientCards(rows) {
           <div class="client-actions" aria-label="Acciones rápidas">
             ${phone ? `<a href="tel:+${phone}" title="Llamar">Tel</a>` : `<span title="Sin teléfono">Tel</span>`}
             ${phone ? `<a href="https://wa.me/${phone}?text=${waText}" target="_blank" rel="noreferrer" title="WhatsApp">WA</a>` : `<span title="Sin WhatsApp">WA</span>`}
-            ${phone ? `<a href="javascript:void(0)" class="bot-disabled" title="WhatsApp Bot en construcción">Bot</a>` : `<span title="Bot pendiente">Bot</span>`}
+            <button class="drawer-trigger" data-nit="${client.nit}" title="Ver ficha completa">Ficha</button>
           </div>
         </article>
       `;
@@ -686,6 +689,12 @@ function renderClients() {
   const rows = filteredClients().sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido) || amount(b.total_saldo) - amount(a.total_saldo));
   setText("clientCount", `${number.format(rows.length)} clientes visibles`);
   $("clientGrid").innerHTML = clientCards(rows);
+  $("clientGrid").querySelectorAll(".drawer-trigger").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openClientDrawer(btn.dataset.nit);
+    });
+  });
 }
 
 async function previewImport(event) {
@@ -696,14 +705,19 @@ async function previewImport(event) {
     return;
   }
   $("importResult").textContent = "Validando archivo...";
+  $("importConfirm").classList.remove("visible");
+  importToken = null;
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch("/api/import/preview", {
-    method: "POST",
-    body: formData,
-  });
+  const response = await fetch("/api/import/preview", { method: "POST", body: formData });
   const result = await response.json();
   $("importResult").textContent = JSON.stringify(result, null, 2);
+  if (result.token) {
+    importToken = result.token;
+    setText("importConfirmMsg", `Validación exitosa: ${number.format(result.facturas)} facturas, ${number.format(result.clientes)} clientes · ${moneyM(result.saldo_total)}`);
+    setText("importConfirmDetail", `Corte detectado: ${result.fecha_corte_detectada || "no detectado"} · ${number.format(result.vendedores)} vendedores`);
+    $("importConfirm").classList.add("visible");
+  }
 }
 
 function rerenderFilteredViews() {
@@ -752,6 +766,219 @@ function renderAssistantAnswer(type) {
   }
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+async function initApp() {
+  try {
+    const res = await fetch("/api/config");
+    supabaseConfig = await res.json();
+  } catch (_) {
+    supabaseConfig = { supabase_url: "", anon_key: "" };
+  }
+  if (supabaseConfig.anon_key && !sessionStorage.getItem("copacol_user")) {
+    $("loginOverlay").classList.remove("hidden");
+    return;
+  }
+  loadDashboard().catch((error) => {
+    console.error(error);
+    status(error.message);
+  });
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const email = $("loginEmail").value.trim();
+  const password = $("loginPassword").value;
+  $("loginError").textContent = "";
+  try {
+    const res = await fetch(`${supabaseConfig.supabase_url}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { apikey: supabaseConfig.anon_key, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error_description || data.msg || "Credenciales incorrectas");
+    sessionStorage.setItem("copacol_user", JSON.stringify({ email: data.user?.email, access_token: data.access_token }));
+    $("loginOverlay").classList.add("hidden");
+    loadDashboard().catch((err) => status(err.message));
+  } catch (err) {
+    $("loginError").textContent = err.message;
+  }
+}
+
+// ── Client drawer ─────────────────────────────────────────────────────────────
+
+function agingChipClass(days) {
+  const d = Number(days || 0);
+  if (d <= 0) return "chip-vigente";
+  if (d <= 30) return "chip-1_30";
+  if (d <= 60) return "chip-31_60";
+  if (d <= 90) return "chip-61_90";
+  if (d <= 120) return "chip-91_120";
+  if (d <= 180) return "chip-121_180";
+  return "chip-181_plus";
+}
+
+async function openClientDrawer(nit) {
+  drawerNit = nit;
+  $("drawerBackdrop").style.display = "block";
+  $("clientDrawer").style.display = "flex";
+  $("drawerName").textContent = "Cliente";
+  $("drawerMeta").textContent = "Cargando…";
+  $("drawerBody").innerHTML = '<p class="drawer-empty">Cargando…</p>';
+  try {
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}`);
+    if (!res.ok) throw new Error("Error al cargar cliente");
+    renderDrawer(await res.json());
+  } catch (err) {
+    $("drawerBody").innerHTML = `<p class="drawer-empty">Error: ${err.message}</p>`;
+  }
+}
+
+function renderDrawer(payload) {
+  const client = payload.client || {};
+  const invoices = payload.invoices || [];
+  const contacts = payload.contacts || [];
+  const name = client.razon_social || "Cliente";
+  $("drawerAvatar").textContent = name.substring(0, 2).toUpperCase();
+  $("drawerName").textContent = name;
+  $("drawerMeta").textContent = `NIT ${client.nit || "-"} · ${client.ciudad || "Sin ciudad"}`;
+
+  const phone = cleanPhone(client.telefono || client.telefono_2 || "");
+  const waText = encodeURIComponent(`Hola ${name}, le contactamos de COPACOL sobre su estado de cartera.`);
+
+  const kpisHtml = `
+    <div class="drawer-kpis">
+      <div class="drawer-kpi"><span>Saldo total</span><strong>${moneyM(client.total_saldo)}</strong></div>
+      <div class="drawer-kpi"><span>Vencido</span><strong>${moneyM(client.total_vencido)}</strong></div>
+      <div class="drawer-kpi"><span>Mora máx.</span><strong>${number.format(client.dias_mora_max || 0)}d</strong></div>
+    </div>`;
+
+  const infoHtml = `
+    <div class="drawer-info-grid">
+      <div class="drawer-info-row"><span>Asesor</span><strong>${client.asesor_nombre || "Sin asesor"}</strong></div>
+      <div class="drawer-info-row"><span>Ciudad</span><strong>${client.ciudad || "Sin ciudad"}</strong></div>
+      ${client.telefono ? `<div class="drawer-info-row"><span>Teléfono</span><strong>${client.telefono}</strong></div>` : ""}
+      ${client.direccion ? `<div class="drawer-info-row"><span>Dirección</span><strong>${client.direccion}</strong></div>` : ""}
+    </div>`;
+
+  const actionsHtml = `
+    <div class="drawer-actions-row">
+      <button class="drawer-action-btn" id="registerGestionBtn">+ Registrar gestión</button>
+      ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
+      ${phone ? `<a href="https://wa.me/${phone}?text=${waText}" target="_blank" rel="noreferrer" class="drawer-action-btn">WhatsApp</a>` : ""}
+    </div>`;
+
+  const overdueInvs = invoices.filter((inv) => Number(inv.dias_mora || 0) > 0).slice(0, 15);
+  const invoicesHtml = overdueInvs.length
+    ? `<div class="drawer-invoices"><h3>Facturas vencidas (${overdueInvs.length})</h3>
+        ${overdueInvs.map((inv) => `
+          <div class="drawer-invoice-row">
+            <span class="inv-num">${inv.numero_factura || "-"}</span>
+            <span class="inv-date">${inv.fecha_vencimiento || "-"}</span>
+            <span class="inv-amount">${money.format(Number(inv.monto || 0))}</span>
+            <span class="aging-chip ${agingChipClass(inv.dias_mora)}">${number.format(Number(inv.dias_mora || 0))}d</span>
+          </div>`).join("")}
+      </div>`
+    : `<p class="drawer-empty">Sin facturas vencidas</p>`;
+
+  const historyHtml = contacts.length
+    ? `<div class="drawer-history"><h3>Historial (${contacts.length})</h3>
+        ${contacts.map((c) => `
+          <div class="history-row">
+            <div class="history-dot"></div>
+            <div>
+              <div class="history-text"><strong>${c.tipo || "Contacto"}</strong> · ${c.resultado || "-"}</div>
+              ${c.observacion ? `<div class="history-meta">${c.observacion}</div>` : ""}
+              <div class="history-meta">${(c.created_at || "").slice(0, 10)} · ${c.registrado_por || "sistema"}</div>
+            </div>
+          </div>`).join("")}
+      </div>`
+    : "";
+
+  $("drawerBody").innerHTML = kpisHtml + infoHtml + actionsHtml + invoicesHtml + historyHtml;
+  $("registerGestionBtn").addEventListener("click", () => openContactModal(client.nit, name));
+}
+
+function closeClientDrawer() {
+  $("drawerBackdrop").style.display = "none";
+  $("clientDrawer").style.display = "none";
+  drawerNit = null;
+}
+
+// ── Contact modal ─────────────────────────────────────────────────────────────
+
+function openContactModal(nit, clientName) {
+  $("contactNit").value = nit;
+  setText("contactModalTitle", `Registrar gestión · ${clientName}`);
+  $("contactResultado").value = "contactado";
+  $("contactObs").value = "";
+  $("contactFechaPromesa").value = "";
+  $("contactMonto").value = "";
+  $("promesaGroup").style.display = "none";
+  $("montoGroup").style.display = "none";
+  $("contactModal").showModal();
+}
+
+async function saveContact() {
+  const nit = $("contactNit").value;
+  const resultado = $("contactResultado").value;
+  const needsExtra = ["promesa", "pago_reportado"].includes(resultado);
+  const row = {
+    tipo: $("contactTipo").value,
+    resultado,
+    observacion: $("contactObs").value.trim(),
+    fecha_promesa: needsExtra ? ($("contactFechaPromesa").value || null) : null,
+    monto_prometido: needsExtra ? (Number($("contactMonto").value || 0) || null) : null,
+    registrado_por: JSON.parse(sessionStorage.getItem("copacol_user") || "{}").email || "sistema",
+  };
+  try {
+    $("saveContact").disabled = true;
+    $("saveContact").textContent = "Guardando…";
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}/contacto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(row),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || "Error al guardar");
+    $("contactModal").close();
+    if (drawerNit === nit) openClientDrawer(nit);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $("saveContact").disabled = false;
+    $("saveContact").textContent = "Guardar gestión";
+  }
+}
+
+// ── Import confirm ────────────────────────────────────────────────────────────
+
+async function confirmImport() {
+  if (!importToken) return;
+  $("confirmImportBtn").disabled = true;
+  $("confirmImportBtn").textContent = "Importando…";
+  try {
+    const res = await fetch("/api/import/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: importToken }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || "Error en importación");
+    $("importResult").textContent = JSON.stringify(result, null, 2);
+    $("importConfirm").classList.remove("visible");
+    importToken = null;
+    loadDashboard().catch((err) => status(err.message));
+  } catch (err) {
+    $("importResult").textContent = `Error: ${err.message}`;
+  } finally {
+    $("confirmImportBtn").disabled = false;
+    $("confirmImportBtn").textContent = "Confirmar importación";
+  }
+}
+
+// ── Event listeners ───────────────────────────────────────────────────────────
+
 $("refreshBtn").addEventListener("click", () => loadDashboard().catch((error) => status(error.message)));
 $("globalSearch").addEventListener("input", rerenderFilteredViews);
 $("sellerFilter").addEventListener("change", rerenderFilteredViews);
@@ -773,6 +1000,18 @@ document.querySelectorAll(".segment").forEach((button) => {
   });
 });
 $("importForm").addEventListener("submit", previewImport);
+$("confirmImportBtn").addEventListener("click", confirmImport);
+$("closeDrawer").addEventListener("click", closeClientDrawer);
+$("drawerBackdrop").addEventListener("click", closeClientDrawer);
+$("loginForm").addEventListener("submit", handleLogin);
+$("cancelContact").addEventListener("click", () => $("contactModal").close());
+$("closeContactModal").addEventListener("click", () => $("contactModal").close());
+$("saveContact").addEventListener("click", saveContact);
+$("contactResultado").addEventListener("change", () => {
+  const show = ["promesa", "pago_reportado"].includes($("contactResultado").value);
+  $("promesaGroup").style.display = show ? "" : "none";
+  $("montoGroup").style.display = show ? "" : "none";
+});
 $("assistantFab").addEventListener("click", () => $("assistantPanel").classList.add("open"));
 $("closeAssistant").addEventListener("click", () => $("assistantPanel").classList.remove("open"));
 document.querySelectorAll("[data-prompt]").forEach((button) => {
@@ -801,7 +1040,4 @@ $("shareAdvisorReport").addEventListener("click", async () => {
   }
 });
 
-loadDashboard().catch((error) => {
-  console.error(error);
-  status(error.message);
-});
+initApp();
