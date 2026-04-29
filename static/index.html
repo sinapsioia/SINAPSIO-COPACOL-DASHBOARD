@@ -4,392 +4,438 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>COPACOL | Dashboard de Cobranzas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <aside class="sidebar">
-      <div class="brand">
-        <img class="brand-logo" src="/assets/copacol-logo.png" alt="COPACOL" />
-        <div>
-          <strong>COPACOL</strong>
-          <span>Central de cobranzas</span>
-        </div>
-      </div>
-      <nav>
-        <a class="active" href="#tablero" data-page-link="tablero">Tablero</a>
-        <a href="#inteligencia" data-page-link="inteligencia">Inteligencia</a>
-        <a href="#asesores" data-page-link="asesores">Asesores</a>
-        <a href="#cartera" data-page-link="cartera">Cartera</a>
-        <a href="#clientes" data-page-link="clientes">Clientes</a>
-        <a href="#carga" data-page-link="carga">Carga</a>
-      </nav>
-      <div class="sidebar-note">
-        <span>Operación</span>
-        <strong>Supabase en vivo</strong>
-      </div>
-    </aside>
+    <div class="app">
 
-    <main>
-      <header class="topbar">
-        <div class="page-title-block">
-          <img src="/assets/copacol-logo.png" alt="COPACOL" />
-          <div>
-            <p class="eyebrow">Distribuidor ferretero</p>
-            <h1 id="pageTitle">Tablero de Cobranzas</h1>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">
+            <img src="/assets/copacol-logo.png" alt="COPACOL" />
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">COPACOL</span>
+            <span class="brand-sub">Cobranzas</span>
           </div>
         </div>
-        <div class="top-actions">
-          <button id="refreshBtn" class="icon-btn" title="Actualizar datos">↻</button>
-          <span id="syncState" class="sync-state">Cargando...</span>
-        </div>
-      </header>
 
-      <section class="filters panel">
-        <div class="filter-group wide">
-          <label for="globalSearch">Buscar</label>
-          <input id="globalSearch" class="search" placeholder="Cliente, NIT, factura, vendedor, ciudad" />
-        </div>
-        <div class="filter-group">
-          <label for="sellerFilter">Vendedor</label>
-          <select id="sellerFilter"></select>
-        </div>
-        <div class="filter-group">
-          <label for="agingFilter">Edad</label>
-          <select id="agingFilter">
-            <option value="all">Todas</option>
-            <option value="vigente">Vigente</option>
-            <option value="1_30">1-30 días</option>
-            <option value="31_60">31-60 días</option>
-            <option value="61_90">61-90 días</option>
-            <option value="91_120">91-120 días</option>
-            <option value="121_180">121-180 días</option>
-            <option value="181_plus">+181 días</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label for="minAmount">Saldo mínimo</label>
-          <input id="minAmount" type="number" min="0" step="100000" placeholder="0" />
-        </div>
-        <button id="clearFilters">Limpiar</button>
-      </section>
+        <nav class="nav">
+          <a class="nav-item active" href="#tablero" data-page-link="tablero">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10-4a1 1 0 011-1h4a1 1 0 011 1v8a1 1 0 01-1 1h-4a1 1 0 01-1-1v-8z"/>
+            </svg>
+            <span>Tablero</span>
+          </a>
+          <a class="nav-item" href="#inteligencia" data-page-link="inteligencia">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+            <span>Inteligencia</span>
+          </a>
+          <a class="nav-item" href="#asesores" data-page-link="asesores">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+            <span>Asesores</span>
+          </a>
+          <a class="nav-item" href="#cartera" data-page-link="cartera">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <span>Cartera</span>
+          </a>
+          <a class="nav-item" href="#clientes" data-page-link="clientes">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+            </svg>
+            <span>Clientes</span>
+          </a>
+          <a class="nav-item" href="#carga" data-page-link="carga">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span>Carga</span>
+          </a>
+        </nav>
 
-      <section id="tablero" class="control-board page active" data-page="tablero">
-        <div class="board-header">
-          <div>
-            <p class="eyebrow">Tablero de control</p>
-            <h2>Cartera COPACOL</h2>
-            <span id="cutDate" class="muted">-</span>
+        <div class="sidebar-foot">
+          <div class="status-pill">
+            <div class="status-dot"></div>
+            <div>
+              <div class="status-title">Supabase en vivo</div>
+              <div class="status-sub">Operación</div>
+            </div>
           </div>
-          <div id="riskPill" class="risk-pill">Calculando riesgo</div>
         </div>
+      </aside>
 
-        <div class="executive-grid">
-          <article class="metric-card">
-            <span>Cartera general</span>
-            <strong id="kpiTotal">-</strong>
-            <small>Total documentos abiertos</small>
-          </article>
-          <article class="metric-card danger">
-            <span>Cartera vencida</span>
-            <strong id="kpiOverdue">-</strong>
-            <div class="mini-progress"><i id="overdueProgress"></i></div>
-            <small id="overduePctCard">-</small>
-          </article>
-          <article class="metric-card blue">
-            <span>Crédito 60 días</span>
-            <strong id="kpiCredito60">-</strong>
-            <small id="kpiCredito60Pct">-</small>
-          </article>
-          <article class="metric-card orange">
-            <span>Crédito 45 días</span>
-            <strong id="kpiCredito45">-</strong>
-            <small id="kpiCredito45Pct">-</small>
-          </article>
-          <article class="metric-card good">
-            <span>Contado</span>
-            <strong id="kpiContado">-</strong>
-            <small id="kpiContadoPct">-</small>
-          </article>
-        </div>
+      <main>
+        <header class="topbar">
+          <div class="page-title-block">
+            <div>
+              <p class="eyebrow">Distribuidor ferretero</p>
+              <h1 id="pageTitle">Tablero de Cobranzas</h1>
+            </div>
+          </div>
+          <div class="top-actions">
+            <button id="refreshBtn" class="icon-btn" title="Actualizar datos">↻</button>
+            <span id="syncState" class="sync-state">Cargando…</span>
+          </div>
+        </header>
 
-        <div class="board-grid">
-          <article class="board-panel">
+        <section class="filters panel">
+          <div class="filter-group wide">
+            <label for="globalSearch">Buscar</label>
+            <input id="globalSearch" class="search" placeholder="Cliente, NIT, factura, vendedor, ciudad" />
+          </div>
+          <div class="filter-group">
+            <label for="sellerFilter">Vendedor</label>
+            <select id="sellerFilter"></select>
+          </div>
+          <div class="filter-group">
+            <label for="agingFilter">Edad</label>
+            <select id="agingFilter">
+              <option value="all">Todas</option>
+              <option value="vigente">Vigente</option>
+              <option value="1_30">1-30 días</option>
+              <option value="31_60">31-60 días</option>
+              <option value="61_90">61-90 días</option>
+              <option value="91_120">91-120 días</option>
+              <option value="121_180">121-180 días</option>
+              <option value="181_plus">+181 días</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="minAmount">Saldo mínimo</label>
+            <input id="minAmount" type="number" min="0" step="100000" placeholder="0" />
+          </div>
+          <button id="clearFilters">Limpiar</button>
+        </section>
+
+        <section id="tablero" class="control-board page active" data-page="tablero">
+          <div class="board-header">
+            <div>
+              <p class="eyebrow">Tablero de control</p>
+              <h2>Cartera COPACOL</h2>
+              <span id="cutDate" class="muted">-</span>
+            </div>
+            <div id="riskPill" class="risk-pill">Calculando riesgo</div>
+          </div>
+
+          <div class="executive-grid">
+            <article class="metric-card">
+              <span>Cartera general</span>
+              <strong id="kpiTotal">-</strong>
+              <small>Total documentos abiertos</small>
+            </article>
+            <article class="metric-card danger">
+              <span>Cartera vencida</span>
+              <strong id="kpiOverdue">-</strong>
+              <div class="mini-progress"><i id="overdueProgress"></i></div>
+              <small id="overduePctCard">-</small>
+            </article>
+            <article class="metric-card blue">
+              <span>Crédito 60 días</span>
+              <strong id="kpiCredito60">-</strong>
+              <small id="kpiCredito60Pct">-</small>
+            </article>
+            <article class="metric-card orange">
+              <span>Crédito 45 días</span>
+              <strong id="kpiCredito45">-</strong>
+              <small id="kpiCredito45Pct">-</small>
+            </article>
+            <article class="metric-card good">
+              <span>Contado</span>
+              <strong id="kpiContado">-</strong>
+              <small id="kpiContadoPct">-</small>
+            </article>
+          </div>
+
+          <div class="board-grid">
+            <article class="board-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Composición cartera</h2>
+                  <span class="muted">Por condición de pago</span>
+                </div>
+              </div>
+              <div class="donut-row">
+                <div id="mixDonut" class="donut big"></div>
+                <div id="mixLegend" class="legend"></div>
+              </div>
+            </article>
+
+            <article class="board-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Cartera vencida por edad</h2>
+                  <span class="muted">Meta +90d menor al 3%</span>
+                </div>
+              </div>
+              <div id="agingColumns" class="column-chart"></div>
+            </article>
+          </div>
+
+          <div class="goal-strip">
+            <div>
+              <span>% vencida total</span>
+              <strong id="goalOverdue">-</strong>
+              <small>Meta: &lt; 8%</small>
+            </div>
+            <div>
+              <span>+90 días</span>
+              <strong id="goalOver90">-</strong>
+              <small>Meta: &lt; 3%</small>
+            </div>
+            <div>
+              <span>Promesas cumplidas</span>
+              <strong>Base por construir</strong>
+              <small>Meta: ≥ 70%</small>
+            </div>
+            <div>
+              <span>Gestión cobro</span>
+              <strong>Base por construir</strong>
+              <small>Meta: ≥ 90%</small>
+            </div>
+          </div>
+        </section>
+
+        <section class="hero page active" data-page="tablero">
+          <div class="hero-copy">
+            <p class="eyebrow">Resumen operativo</p>
+            <h2 id="heroTitle">-</h2>
+            <p class="muted">Semáforo: verde ≤ 8%, amarillo 8-15%, rojo &gt; 15%</p>
+          </div>
+          <div class="hero-meter">
+            <div id="donut" class="donut"></div>
+            <div>
+              <span class="muted">Cartera vencida</span>
+              <strong id="overduePctHero">-</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="kpi-grid page active" data-page="tablero">
+          <article class="kpi good">
+            <span>Saldo vigente</span>
+            <strong id="kpiCurrent">-</strong>
+            <small>Por vencer o al día</small>
+          </article>
+          <article class="kpi warn">
+            <span>Mora promedio</span>
+            <strong id="kpiAvgMora">-</strong>
+            <small>Solo facturas vencidas</small>
+          </article>
+          <article class="kpi">
+            <span>Clientes</span>
+            <strong id="kpiClients">-</strong>
+            <small id="kpiOverdueClients">-</small>
+          </article>
+          <article class="kpi">
+            <span>Top 10 concentra</span>
+            <strong id="kpiConcentration">-</strong>
+            <small id="kpiConcentrationMoney">-</small>
+          </article>
+        </section>
+
+        <section class="dashboard-grid page active" data-page="tablero">
+          <article class="panel">
             <div class="section-head">
               <div>
-                <h2>Composición cartera</h2>
-                <span class="muted">Por condición de pago</span>
+                <h2>Edad de cartera</h2>
+                <span class="muted">Distribución por saldo</span>
               </div>
             </div>
-            <div class="donut-row">
-              <div id="mixDonut" class="donut big"></div>
-              <div id="mixLegend" class="legend"></div>
-            </div>
+            <div id="agingBars" class="bar-stack"></div>
           </article>
 
-          <article class="board-panel">
+          <article class="panel">
             <div class="section-head">
               <div>
-                <h2>Cartera vencida por edad</h2>
-                <span class="muted">Meta +90d menor al 3%</span>
+                <h2>Vendedores</h2>
+                <span class="muted">Cartera y vencido por asesor</span>
               </div>
             </div>
-            <div id="agingColumns" class="column-chart"></div>
+            <div id="sellerList" class="rank-list"></div>
           </article>
-        </div>
+        </section>
 
-        <div class="goal-strip">
-          <div>
-            <span>% vencida total</span>
-            <strong id="goalOverdue">-</strong>
-            <small>Meta: &lt; 8%</small>
-          </div>
-          <div>
-            <span>+90 días</span>
-            <strong id="goalOver90">-</strong>
-            <small>Meta: &lt; 3%</small>
-          </div>
-          <div>
-            <span>Promesas cumplidas</span>
-            <strong>Base por construir</strong>
-            <small>Meta: ≥ 70%</small>
-          </div>
-          <div>
-            <span>Gestión cobro</span>
-            <strong>Base por construir</strong>
-            <small>Meta: ≥ 90%</small>
-          </div>
-        </div>
-      </section>
+        <section class="dashboard-grid page active" data-page="tablero">
+          <article class="panel">
+            <div class="section-head">
+              <div>
+                <h2>Ciudades</h2>
+                <span class="muted">Concentración geográfica</span>
+              </div>
+            </div>
+            <div id="cityBars" class="bar-stack compact"></div>
+          </article>
 
-      <section class="hero page active" data-page="tablero">
-        <div class="hero-copy">
-          <p class="eyebrow">Resumen operativo</p>
-          <h2 id="heroTitle">-</h2>
-          <p class="muted">Semáforo: verde ≤ 8%, amarillo 8-15%, rojo &gt; 15%</p>
-        </div>
-        <div class="hero-meter">
-          <div id="donut" class="donut"></div>
-          <div>
-            <span class="muted">Cartera vencida</span>
-            <strong id="overduePctHero">-</strong>
-          </div>
-        </div>
-      </section>
+          <article id="prioridad" class="panel">
+            <div class="section-head">
+              <div>
+                <h2>Acción diaria</h2>
+                <span class="muted">Clientes que conviene gestionar primero</span>
+              </div>
+            </div>
+            <div id="priorityList" class="priority-list"></div>
+          </article>
+        </section>
 
-      <section class="kpi-grid page active" data-page="tablero">
-        <article class="kpi good">
-          <span>Saldo vigente</span>
-          <strong id="kpiCurrent">-</strong>
-          <small>Por vencer o al día</small>
-        </article>
-        <article class="kpi warn">
-          <span>Mora promedio</span>
-          <strong id="kpiAvgMora">-</strong>
-          <small>Solo facturas vencidas</small>
-        </article>
-        <article class="kpi">
-          <span>Clientes</span>
-          <strong id="kpiClients">-</strong>
-          <small id="kpiOverdueClients">-</small>
-        </article>
-        <article class="kpi">
-          <span>Top 10 concentra</span>
-          <strong id="kpiConcentration">-</strong>
-          <small id="kpiConcentrationMoney">-</small>
-        </article>
-      </section>
-
-      <section class="dashboard-grid page active" data-page="tablero">
-        <article class="panel">
+        <section id="inteligencia" class="insight-board page" data-page="inteligencia">
           <div class="section-head">
             <div>
-              <h2>Edad de cartera</h2>
-              <span class="muted">Distribución por saldo</span>
+              <p class="eyebrow">Inteligencia de cobranza</p>
+              <h2>Lecturas para decidir a quién cobrar primero</h2>
             </div>
+            <span class="muted">Propuestas inspiradas en tableros AR/collections</span>
           </div>
-          <div id="agingBars" class="bar-stack"></div>
-        </article>
 
-        <article class="panel">
-          <div class="section-head">
+          <div class="insight-grid">
+            <article class="panel insight-panel large">
+              <div class="section-head">
+                <div>
+                  <h2>Pareto de clientes</h2>
+                  <span class="muted">Concentración del saldo vencido</span>
+                </div>
+              </div>
+              <div id="paretoChart" class="pareto-chart"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Ruta de gestión</h2>
+                  <span class="muted">Esfuerzo sugerido por edad</span>
+                </div>
+              </div>
+              <div id="effortChart" class="effort-chart"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Próximos vencimientos</h2>
+                  <span class="muted">Caja defendible en 7 días</span>
+                </div>
+              </div>
+              <div id="dueSoonChart" class="gauge-card"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Contactabilidad</h2>
+                  <span class="muted">Saldo con teléfono disponible</span>
+                </div>
+              </div>
+              <div id="contactChart" class="split-chart"></div>
+            </article>
+
+            <article class="panel insight-panel large">
+              <div class="section-head">
+                <div>
+                  <h2>Mapa de riesgo por asesor</h2>
+                  <span class="muted">Saldo total vs. porcentaje vencido</span>
+                </div>
+              </div>
+              <div id="advisorRiskMap" class="risk-map"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="asesores" class="panel page" data-page="asesores">
+          <div class="section-head table-head">
             <div>
-              <h2>Vendedores</h2>
-              <span class="muted">Cartera y vencido por asesor</span>
+              <h2>Cartera vencida por asesor</h2>
+              <span class="muted">Detalle completo en M COP y porcentaje vencido</span>
             </div>
           </div>
-          <div id="sellerList" class="rank-list"></div>
-        </article>
-      </section>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asesor</th>
+                  <th>Cartera gral.</th>
+                  <th>1-30d</th>
+                  <th>31-60d</th>
+                  <th>61-90d</th>
+                  <th>91-120d</th>
+                  <th>121-180d</th>
+                  <th>+181d</th>
+                  <th>Total venc.</th>
+                  <th>% venc.</th>
+                </tr>
+              </thead>
+              <tbody id="advisorTable"></tbody>
+            </table>
+          </div>
+        </section>
 
-      <section class="dashboard-grid page active" data-page="tablero">
-        <article class="panel">
-          <div class="section-head">
+        <section id="cartera" class="panel page" data-page="cartera">
+          <div class="section-head table-head">
             <div>
-              <h2>Ciudades</h2>
-              <span class="muted">Concentración geográfica</span>
+              <h2>Cartera detallada</h2>
+              <span id="invoiceCount" class="muted">-</span>
+            </div>
+            <div class="segmented">
+              <button class="segment active" data-mode="all">Todas</button>
+              <button class="segment" data-mode="overdue">Vencidas</button>
+              <button class="segment" data-mode="soon">Próximas</button>
             </div>
           </div>
-          <div id="cityBars" class="bar-stack compact"></div>
-        </article>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>NIT</th>
+                  <th>Factura</th>
+                  <th>Vendedor</th>
+                  <th>Ciudad</th>
+                  <th>Vence</th>
+                  <th>Días</th>
+                  <th>Saldo</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="invoiceTable"></tbody>
+            </table>
+          </div>
+        </section>
 
-        <article id="prioridad" class="panel">
-          <div class="section-head">
+        <section id="clientes" class="panel page" data-page="clientes">
+          <div class="section-head table-head">
             <div>
-              <h2>Acción diaria</h2>
-              <span class="muted">Clientes que conviene gestionar primero</span>
+              <h2>Clientes a gestionar</h2>
+              <span id="clientCount" class="muted">-</span>
             </div>
           </div>
-          <div id="priorityList" class="priority-list"></div>
-        </article>
-      </section>
+          <div class="client-grid" id="clientGrid"></div>
+        </section>
 
-      <section id="inteligencia" class="insight-board page" data-page="inteligencia">
-        <div class="section-head">
+        <section id="carga" class="panel import-panel page" data-page="carga">
           <div>
-            <p class="eyebrow">Inteligencia de cobranza</p>
-            <h2>Lecturas para decidir a quién cobrar primero</h2>
+            <p class="eyebrow">Actualización de datos</p>
+            <h2>Cargar nuevo Excel de Siigo</h2>
+            <p class="muted">
+              Primero valida estructura, corte, totales, clientes y vendedores.
+              La importación definitiva queda protegida para evitar reemplazos accidentales.
+            </p>
           </div>
-          <span class="muted">Propuestas adicionales inspiradas en tableros AR/collections</span>
-        </div>
+          <form id="importForm" class="import-box">
+            <input id="xlsxFile" name="file" type="file" accept=".xlsx" />
+            <button type="submit">Validar archivo</button>
+          </form>
+          <pre id="importResult" class="import-result">Esperando archivo…</pre>
+        </section>
+      </main>
 
-        <div class="insight-grid">
-          <article class="panel insight-panel large">
-            <div class="section-head">
-              <div>
-                <h2>Pareto de clientes</h2>
-                <span class="muted">Concentración del saldo vencido</span>
-              </div>
-            </div>
-            <div id="paretoChart" class="pareto-chart"></div>
-          </article>
-
-          <article class="panel insight-panel">
-            <div class="section-head">
-              <div>
-                <h2>Ruta de gestión</h2>
-                <span class="muted">Esfuerzo sugerido por edad</span>
-              </div>
-            </div>
-            <div id="effortChart" class="effort-chart"></div>
-          </article>
-
-          <article class="panel insight-panel">
-            <div class="section-head">
-              <div>
-                <h2>Próximos vencimientos</h2>
-                <span class="muted">Caja defendible en 7 días</span>
-              </div>
-            </div>
-            <div id="dueSoonChart" class="gauge-card"></div>
-          </article>
-
-          <article class="panel insight-panel">
-            <div class="section-head">
-              <div>
-                <h2>Contactabilidad</h2>
-                <span class="muted">Saldo con teléfono disponible</span>
-              </div>
-            </div>
-            <div id="contactChart" class="split-chart"></div>
-          </article>
-
-          <article class="panel insight-panel large">
-            <div class="section-head">
-              <div>
-                <h2>Mapa de riesgo por asesor</h2>
-                <span class="muted">Saldo total vs. porcentaje vencido</span>
-              </div>
-            </div>
-            <div id="advisorRiskMap" class="risk-map"></div>
-          </article>
-        </div>
-      </section>
-
-      <section id="asesores" class="panel page" data-page="asesores">
-        <div class="section-head table-head">
-          <div>
-            <h2>Cartera vencida por asesor</h2>
-            <span class="muted">Detalle completo en M COP y porcentaje vencido</span>
-          </div>
-        </div>
-        <div class="table-wrap compact-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Asesor</th>
-                <th>Cartera gral.</th>
-                <th>1-30d</th>
-                <th>31-60d</th>
-                <th>61-90d</th>
-                <th>91-120d</th>
-                <th>121-180d</th>
-                <th>+181d</th>
-                <th>Total venc.</th>
-                <th>% venc.</th>
-              </tr>
-            </thead>
-            <tbody id="advisorTable"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="cartera" class="panel page" data-page="cartera">
-        <div class="section-head table-head">
-          <div>
-            <h2>Cartera detallada</h2>
-            <span id="invoiceCount" class="muted">-</span>
-          </div>
-          <div class="segmented">
-            <button class="segment active" data-mode="all">Todas</button>
-            <button class="segment" data-mode="overdue">Vencidas</button>
-            <button class="segment" data-mode="soon">Próximas</button>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>NIT</th>
-                <th>Factura</th>
-                <th>Vendedor</th>
-                <th>Ciudad</th>
-                <th>Vence</th>
-                <th>Días</th>
-                <th>Saldo</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody id="invoiceTable"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="clientes" class="panel page" data-page="clientes">
-        <div class="section-head table-head">
-          <div>
-            <h2>Clientes a gestionar</h2>
-            <span id="clientCount" class="muted">-</span>
-          </div>
-        </div>
-        <div class="client-grid" id="clientGrid"></div>
-      </section>
-
-      <section id="carga" class="panel import-panel page" data-page="carga">
-        <div>
-          <p class="eyebrow">Actualización de datos</p>
-          <h2>Cargar nuevo Excel de Siigo</h2>
-          <p class="muted">
-            Primero valida estructura, corte, totales, clientes y vendedores. La importación definitiva queda protegida para evitar reemplazos accidentales.
-          </p>
-        </div>
-        <form id="importForm" class="import-box">
-          <input id="xlsxFile" name="file" type="file" accept=".xlsx" />
-          <button type="submit">Validar archivo</button>
-        </form>
-        <pre id="importResult" class="import-result">Esperando archivo...</pre>
-      </section>
-    </main>
+    </div><!-- /.app -->
 
     <dialog id="advisorModal" class="advisor-modal">
       <div class="modal-head">
@@ -416,7 +462,7 @@
         <button id="closeAssistant" class="icon-btn">×</button>
       </div>
       <div class="assistant-body">
-        <p>Estoy listo para consultar cartera, explicar métricas y sugerir prioridades. La conexión con IA queda preparada para la siguiente fase.</p>
+        <p>Consulta cartera, explica métricas y sugiere prioridades con los datos actuales.</p>
         <div id="assistantAnswer" class="assistant-answer">Elige una pregunta rápida para ver un análisis local con los datos actuales.</div>
         <button data-prompt="asesor">¿Qué asesor está más crítico?</button>
         <button data-prompt="clientes">Top clientes para cobrar hoy</button>
