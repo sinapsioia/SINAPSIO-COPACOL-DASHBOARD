@@ -39,7 +39,7 @@ load_env()
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -395,19 +395,23 @@ def build_client_payload(nit: str) -> dict:
     }
 
 
-def call_gemini(system: str, user: str) -> str:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY no configurado en el servidor.")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+def call_groq(system: str, user: str) -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY no configurado en el servidor.")
     body = json.dumps({
-        "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.2},
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": 1024,
+        "temperature": 0.2,
     }).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=body,
+        method="POST",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"]
 
 
 def confirm_import(token: str) -> dict:
@@ -772,7 +776,7 @@ Reglas de respuesta:
 - Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
 - Máximo 4 oraciones salvo que pidan análisis completo."""
 
-                answer = call_gemini(system_prompt, question)
+                answer = call_groq(system_prompt, question)
                 json_response(self, 200, {"answer": answer})
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
