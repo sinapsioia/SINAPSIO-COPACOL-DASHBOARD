@@ -410,8 +410,12 @@ def call_groq(system: str, user: str) -> str:
         method="POST",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"]
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Groq {exc.code}: {detail}")
 
 
 def confirm_import(token: str) -> dict:
