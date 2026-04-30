@@ -39,6 +39,7 @@ load_env()
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -394,6 +395,21 @@ def build_client_payload(nit: str) -> dict:
     }
 
 
+def call_gemini(system: str, user: str) -> str:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY no configurado en el servidor.")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    body = json.dumps({
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"parts": [{"text": user}]}],
+        "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.2},
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
 def confirm_import(token: str) -> dict:
     entry = IMPORT_CACHE.get(token)
     if not entry:
@@ -696,6 +712,68 @@ class Handler(BaseHTTPRequestHandler):
                 row = {**data, "nit": nit, "created_at": data.get("created_at") or datetime.now().isoformat()}
                 result = supabase_insert("copacol_log_contactos", row)
                 json_response(self, 200, {"status": "ok", "data": result})
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/assistant":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                question = (data.get("question") or "").strip()
+                if not question:
+                    json_response(self, 400, {"error": "Pregunta vacía"})
+                    return
+                ctx = data.get("context") or {}
+
+                def fmt(v: float) -> str:
+                    return f"${v / 1_000_000:.1f}M"
+
+                clients_txt = "\n".join(
+                    f"- {c.get('razon_social','?')}: {fmt(money(c.get('total_vencido')))} vencido, {c.get('dias_mora_max',0):.0f} días, asesor {c.get('asesor_nombre','?')}"
+                    for c in (ctx.get("top_clientes") or [])[:8]
+                )
+                asesores_txt = "\n".join(
+                    f"- {a.get('nombre','?')}: {fmt(money(a.get('total')))} cartera, {money(a.get('pct_vencido',0))*100:.0f}% vencido"
+                    for a in (ctx.get("top_asesores") or [])[:5]
+                )
+                aging_txt = "\n".join(
+                    f"- {k}: {fmt(money(v))}"
+                    for k, v in (ctx.get("aging") or {}).items()
+                )
+                pct_vencido = money(ctx.get("pct_vencido", 0))
+                semaforo = "🟢 Verde" if pct_vencido <= 8 else "🟡 Amarillo" if pct_vencido <= 15 else "🔴 Rojo"
+
+                system_prompt = f"""Eres el asistente de cobranzas de COPACOL, distribuidor ferretero colombiano. \
+Tu única función es ayudar al equipo con preguntas sobre la cartera de crédito, cobranzas, clientes, asesores y métricas financieras del dashboard.
+
+RESTRICCIÓN IMPORTANTE: Si la pregunta no está relacionada con cartera, cobranzas, clientes, asesores, facturas, mora, pagos o el dashboard de COPACOL, responde ÚNICAMENTE: "Solo puedo ayudarte con preguntas sobre la cartera y cobranzas de COPACOL."
+
+DATOS ACTUALES (corte: {ctx.get('fecha_corte') or 'sin fecha'}):
+- Saldo total: {fmt(money(ctx.get('total_saldo')))}
+- Cartera vencida: {fmt(money(ctx.get('total_vencido')))} ({pct_vencido:.1f}% del total) · Semáforo: {semaforo}
+- Cartera vigente: {fmt(money(ctx.get('total_vigente')))}
+- Clientes: {ctx.get('clientes',0)} activos, {ctx.get('clientes_vencidos',0)} con mora
+- Mora promedio: {money(ctx.get('mora_promedio',0)):.0f} días
+- Facturas vencidas: {ctx.get('facturas_vencidas',0)}
+
+DISTRIBUCIÓN POR EDAD:
+{aging_txt}
+
+TOP CLIENTES CON MAYOR MORA:
+{clients_txt}
+
+ASESORES:
+{asesores_txt}
+
+Reglas de respuesta:
+- Español, tono operativo y directo.
+- Montos en millones (ej: $2.4M).
+- Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
+- Máximo 4 oraciones salvo que pidan análisis completo."""
+
+                answer = call_gemini(system_prompt, question)
+                json_response(self, 200, {"answer": answer})
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return

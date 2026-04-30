@@ -744,25 +744,73 @@ function showPage(page) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function renderAssistantAnswer(type) {
-  if (!dashboard) return;
-  const view = dashboard.view || buildView();
-  if (type === "asesor") {
-    const advisor = [...view.seller_aging].sort((a, b) => b.pct_vencido - a.pct_vencido || b.vencido - a.vencido)[0];
-    $("assistantAnswer").innerHTML = advisor
-      ? `<strong>${advisor.nombre}</strong> es el asesor más crítico: ${pct.format(advisor.pct_vencido)} vencido sobre ${money.format(advisor.total)}. Prioriza sus clientes con mayor mora y revisa promesas de pago.`
-      : "No hay asesor crítico con el filtro actual.";
+// ── Chat IA ───────────────────────────────────────────────────────────────────
+
+let chatHistory = [];
+
+function buildAssistantContext() {
+  if (!dashboard) return {};
+  const view = dashboard.view || dashboard;
+  const s = view.summary;
+  return {
+    fecha_corte: s.fecha_corte,
+    total_saldo: s.total_saldo,
+    total_vencido: s.total_vencido,
+    total_vigente: s.total_vigente,
+    pct_vencido: s.total_saldo ? (s.total_vencido / s.total_saldo) * 100 : 0,
+    clientes: s.clientes,
+    clientes_vencidos: s.clientes_vencidos,
+    mora_promedio: s.mora_promedio,
+    facturas_vencidas: s.facturas_vencidas,
+    aging: view.aging,
+    top_clientes: [...view.clients]
+      .filter((c) => amount(c.total_vencido) > 0)
+      .sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido))
+      .slice(0, 8)
+      .map((c) => ({ razon_social: c.razon_social, total_vencido: c.total_vencido, dias_mora_max: c.dias_mora_max, asesor_nombre: c.asesor_nombre })),
+    top_asesores: [...(view.seller_aging || [])]
+      .sort((a, b) => b.vencido - a.vencido)
+      .slice(0, 5)
+      .map((a) => ({ nombre: a.nombre, total: a.total, vencido: a.vencido, pct_vencido: a.pct_vencido })),
+  };
+}
+
+function renderChatMessages() {
+  const el = $("chatMessages");
+  if (!el) return;
+  if (chatHistory.length === 0) {
+    el.innerHTML = `<div class="chat-message ai">Hola, soy el asistente de COPACOL con acceso a los datos reales de la cartera. Puedo explicarte cualquier métrica, sugerirte a quién cobrar primero y analizar riesgo por asesor o cliente. ¿En qué te ayudo?</div>`;
+    return;
   }
-  if (type === "clientes") {
-    const clients = [...view.clients].filter((client) => amount(client.total_vencido) > 0).sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido)).slice(0, 3);
-    $("assistantAnswer").innerHTML = clients.length
-      ? clients.map((client, index) => `<strong>${index + 1}. ${client.razon_social}</strong>: ${money.format(client.total_vencido)} vencido, ${client.dias_mora_max} días.`).join("<br>")
-      : "No hay clientes vencidos con el filtro actual.";
-  }
-  if (type === "riesgo") {
-    const ratio = view.summary.total_saldo ? view.summary.total_vencido / view.summary.total_saldo : 0;
-    const color = ratio <= 0.08 ? "verde" : ratio <= 0.15 ? "amarillo" : "rojo";
-    $("assistantAnswer").innerHTML = `El semáforo está en <strong>${color}</strong>: ${pct.format(ratio)} de la cartera está vencida. La meta del PDF es verde hasta 8%, amarillo 8-15% y rojo por encima de 15%.`;
+  el.innerHTML = chatHistory.map((m) => `<div class="chat-message ${m.role}">${m.text.replace(/\n/g, "<br>")}</div>`).join("");
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendChatMessage(text) {
+  if (!text.trim()) return;
+  chatHistory.push({ role: "user", text });
+  renderChatMessages();
+  $("chatSend").disabled = true;
+  $("chatInput").disabled = true;
+  const el = $("chatMessages");
+  el.innerHTML += `<div class="chat-message ai typing" id="typingDot">Analizando datos…</div>`;
+  el.scrollTop = el.scrollHeight;
+  try {
+    const res = await fetch("/api/assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: text, context: buildAssistantContext() }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error del asistente");
+    chatHistory.push({ role: "ai", text: data.answer });
+  } catch (err) {
+    chatHistory.push({ role: "ai", text: `No pude procesar tu pregunta: ${err.message}` });
+  } finally {
+    $("chatSend").disabled = false;
+    $("chatInput").disabled = false;
+    renderChatMessages();
+    $("chatInput").focus();
   }
 }
 
@@ -1012,10 +1060,21 @@ $("contactResultado").addEventListener("change", () => {
   $("promesaGroup").style.display = show ? "" : "none";
   $("montoGroup").style.display = show ? "" : "none";
 });
-$("assistantFab").addEventListener("click", () => $("assistantPanel").classList.add("open"));
+$("assistantFab").addEventListener("click", () => {
+  $("assistantPanel").classList.add("open");
+  renderChatMessages();
+  $("chatInput").focus();
+});
 $("closeAssistant").addEventListener("click", () => $("assistantPanel").classList.remove("open"));
-document.querySelectorAll("[data-prompt]").forEach((button) => {
-  button.addEventListener("click", () => renderAssistantAnswer(button.dataset.prompt));
+$("chatSend").addEventListener("click", () => {
+  const text = $("chatInput").value.trim();
+  if (text) { $("chatInput").value = ""; sendChatMessage(text); }
+});
+$("chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatSend").click(); }
+});
+document.querySelectorAll(".chat-chip").forEach((btn) => {
+  btn.addEventListener("click", () => sendChatMessage(btn.dataset.prompt));
 });
 document.querySelectorAll("[data-page-link]").forEach((link) => {
   link.addEventListener("click", (event) => {

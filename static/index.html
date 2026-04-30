@@ -548,21 +548,30 @@
 
     <!-- Import confirm section (injected inside carga page by JS) -->
 
-    <button id="assistantFab" class="assistant-fab" title="Asistente virtual">AI</button>
+    <button id="assistantFab" class="assistant-fab" title="Asistente IA">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+      </svg>
+    </button>
     <aside id="assistantPanel" class="assistant-panel">
       <div class="assistant-head">
         <div>
-          <p class="eyebrow">Asistente virtual</p>
-          <strong>Copacol IA</strong>
+          <p class="eyebrow">IA · Datos en tiempo real</p>
+          <strong>Asistente COPACOL</strong>
         </div>
         <button id="closeAssistant" class="icon-btn">×</button>
       </div>
-      <div class="assistant-body">
-        <p>Consulta cartera, explica métricas y sugiere prioridades con los datos actuales.</p>
-        <div id="assistantAnswer" class="assistant-answer">Elige una pregunta rápida para ver un análisis local con los datos actuales.</div>
-        <button data-prompt="asesor">¿Qué asesor está más crítico?</button>
-        <button data-prompt="clientes">Top clientes para cobrar hoy</button>
-        <button data-prompt="riesgo">Explícame el semáforo</button>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-quick">
+        <button class="chat-chip" data-prompt="¿Qué asesor está más crítico hoy y por qué?">Asesor crítico</button>
+        <button class="chat-chip" data-prompt="¿A qué clientes debo llamar primero hoy?">Prioridad hoy</button>
+        <button class="chat-chip" data-prompt="Explícame el semáforo de riesgo de la cartera">Semáforo</button>
+        <button class="chat-chip" data-prompt="¿Cómo está la cartera de más de 90 días?">+90 días</button>
+        <button class="chat-chip" data-prompt="Dame un resumen ejecutivo de la cartera actual">Resumen ejecutivo</button>
+      </div>
+      <div class="chat-input-row">
+        <input id="chatInput" class="chat-input" placeholder="Pregunta sobre la cartera…" type="text" autocomplete="off" />
+        <button id="chatSend" class="chat-send">↑</button>
       </div>
     </aside>
 
