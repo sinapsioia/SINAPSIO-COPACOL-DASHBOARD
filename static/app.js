@@ -786,14 +786,22 @@ function renderChatMessages() {
   el.scrollTop = el.scrollHeight;
 }
 
+let chatBusy = false;
+
+function setChatBusy(busy) {
+  chatBusy = busy;
+  $("chatSend").disabled = busy;
+  $("chatInput").disabled = busy;
+  document.querySelectorAll(".chat-chip").forEach((c) => (c.disabled = busy));
+}
+
 async function sendChatMessage(text) {
-  if (!text.trim()) return;
+  if (!text.trim() || chatBusy) return;
   chatHistory.push({ role: "user", text });
+  setChatBusy(true);
   renderChatMessages();
-  $("chatSend").disabled = true;
-  $("chatInput").disabled = true;
   const el = $("chatMessages");
-  el.innerHTML += `<div class="chat-message ai typing" id="typingDot">Analizando datos…</div>`;
+  el.innerHTML += `<div class="chat-message ai typing">Analizando datos…</div>`;
   el.scrollTop = el.scrollHeight;
   try {
     const res = await fetch("/api/assistant", {
@@ -805,10 +813,9 @@ async function sendChatMessage(text) {
     if (!res.ok) throw new Error(data.error || "Error del asistente");
     chatHistory.push({ role: "ai", text: data.answer });
   } catch (err) {
-    chatHistory.push({ role: "ai", text: `No pude procesar tu pregunta: ${err.message}` });
+    chatHistory.push({ role: "ai", text: `No pude responder: ${err.message}` });
   } finally {
-    $("chatSend").disabled = false;
-    $("chatInput").disabled = false;
+    setChatBusy(false);
     renderChatMessages();
     $("chatInput").focus();
   }

@@ -398,7 +398,7 @@ def build_client_payload(nit: str) -> dict:
 def call_gemini(system: str, user: str) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY no configurado en el servidor.")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     body = json.dumps({
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"parts": [{"text": user}]}],
