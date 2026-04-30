@@ -40,6 +40,8 @@ SUPABASE_URL = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SU
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -395,9 +397,28 @@ def build_client_payload(nit: str) -> dict:
     }
 
 
-def call_groq(system: str, user: str) -> str:
+def call_ai(system: str, user: str) -> str:
+    # Intenta Ollama primero (interno, sin API key)
+    try:
+        body = json.dumps({
+            "model": OLLAMA_MODEL,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/chat",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))["message"]["content"]
+    except Exception:
+        pass
+
+    # Fallback: Groq (requiere GROQ_API_KEY)
     if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY no configurado en el servidor.")
+        raise RuntimeError("Asistente IA no disponible. Configura OLLAMA_URL o GROQ_API_KEY.")
     body = json.dumps({
         "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -415,7 +436,7 @@ def call_groq(system: str, user: str) -> str:
             return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Groq {exc.code}: {detail}")
+        raise RuntimeError(f"Groq error {exc.code}: {detail}")
 
 
 def confirm_import(token: str) -> dict:
@@ -780,7 +801,7 @@ Reglas de respuesta:
 - Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
 - Máximo 4 oraciones salvo que pidan análisis completo."""
 
-                answer = call_groq(system_prompt, question)
+                answer = call_ai(system_prompt, question)
                 json_response(self, 200, {"answer": answer})
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
