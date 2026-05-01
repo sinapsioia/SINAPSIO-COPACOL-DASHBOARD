@@ -839,8 +839,11 @@ Reglas de respuesta:
                         continue
                     file_bytes = part[header_end + 4:].rstrip(b"\r\n--")
                     break
+            elif "openxmlformats" in content_type or "octet-stream" in content_type or "excel" in content_type:
+                # Binary body enviado directamente por n8n (contentType: binaryData)
+                file_bytes = body
             else:
-                json_response(self, 400, {"error": "Envia application/json con file_base64 o multipart/form-data."})
+                json_response(self, 400, {"error": "Envia application/json con file_base64, multipart/form-data o binario xlsx."})
                 return
             if not file_bytes:
                 json_response(self, 400, {"error": "No se encontro archivo en la solicitud."})
