@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import mimetypes
 import os
@@ -42,6 +43,7 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+N8N_API_TOKEN = os.environ.get("N8N_API_TOKEN", "")
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -803,6 +805,54 @@ Reglas de respuesta:
 
                 answer = call_ai(system_prompt, question)
                 json_response(self, 200, {"answer": answer})
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/n8n/import":
+            auth = self.headers.get("Authorization", "")
+            if not N8N_API_TOKEN or auth != f"Bearer {N8N_API_TOKEN}":
+                json_response(self, 401, {"error": "Unauthorized"})
+                return
+            content_type = self.headers.get("Content-Type", "")
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            file_bytes = None
+            if "application/json" in content_type:
+                data = json.loads(body.decode("utf-8"))
+                file_b64 = data.get("file_base64", "")
+                if not file_b64:
+                    json_response(self, 400, {"error": "Campo file_base64 requerido."})
+                    return
+                file_bytes = base64.b64decode(file_b64)
+            elif "multipart/form-data" in content_type:
+                boundary_match = re.search("boundary=(.+)", content_type)
+                if not boundary_match:
+                    json_response(self, 400, {"error": "No se encontro boundary."})
+                    return
+                boundary = ("--" + boundary_match.group(1)).encode("utf-8")
+                for part in body.split(boundary):
+                    if b'filename="' not in part:
+                        continue
+                    header_end = part.find(b"\r\n\r\n")
+                    if header_end == -1:
+                        continue
+                    file_bytes = part[header_end + 4:].rstrip(b"\r\n--")
+                    break
+            else:
+                json_response(self, 400, {"error": "Envia application/json con file_base64 o multipart/form-data."})
+                return
+            if not file_bytes:
+                json_response(self, 400, {"error": "No se encontro archivo en la solicitud."})
+                return
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = Path(tmp.name)
+                preview = parse_xlsx(tmp_path)
+                tmp_path.unlink(missing_ok=True)
+                result = confirm_import(preview["token"])
+                json_response(self, 200, result)
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return
