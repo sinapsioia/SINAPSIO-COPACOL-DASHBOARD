@@ -809,6 +809,42 @@ Reglas de respuesta:
                 json_response(self, 400, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/n8n/preview":
+            auth = self.headers.get("Authorization", "")
+            if not N8N_API_TOKEN or auth != f"Bearer {N8N_API_TOKEN}":
+                json_response(self, 401, {"error": "Unauthorized"})
+                return
+            content_type = self.headers.get("Content-Type", "")
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            file_bytes = None
+            if "openxmlformats" in content_type or "octet-stream" in content_type or "excel" in content_type:
+                file_bytes = body
+            elif "multipart/form-data" in content_type:
+                boundary_match = re.search("boundary=(.+)", content_type)
+                if boundary_match:
+                    boundary = ("--" + boundary_match.group(1)).encode("utf-8")
+                    for part in body.split(boundary):
+                        if b'filename="' not in part:
+                            continue
+                        header_end = part.find(b"\r\n\r\n")
+                        if header_end != -1:
+                            file_bytes = part[header_end + 4:].rstrip(b"\r\n--")
+                            break
+            if not file_bytes:
+                json_response(self, 400, {"error": "No se encontro archivo xlsx en la solicitud."})
+                return
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = Path(tmp.name)
+                preview = parse_xlsx(tmp_path)
+                tmp_path.unlink(missing_ok=True)
+                json_response(self, 200, preview)
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/n8n/import":
             auth = self.headers.get("Authorization", "")
             if not N8N_API_TOKEN or auth != f"Bearer {N8N_API_TOKEN}":
