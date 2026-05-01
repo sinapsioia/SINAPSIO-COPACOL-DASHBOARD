@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 .DS_Store
 Dashboard Copacol _standalone_.html
+*.xlsx
+*.xls
