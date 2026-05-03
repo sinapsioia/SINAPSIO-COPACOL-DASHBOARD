@@ -42,6 +42,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
+OLLAMA_URLS = [url.strip().rstrip("/") for url in os.environ.get("OLLAMA_URLS", OLLAMA_URL).split(",") if url.strip()]
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 N8N_API_TOKEN = os.environ.get("N8N_API_TOKEN", "")
 N8N_IMPORT_WEBHOOK_URL = os.environ.get("N8N_IMPORT_WEBHOOK_URL", "").strip()
@@ -526,26 +527,28 @@ def build_whatsapp_payload(nit: str, requested_by: str = "dashboard") -> dict:
 
 def call_ai(system: str, user: str) -> str:
     # Intenta Ollama primero (interno, sin API key)
-    try:
-        body = json.dumps({
-            "model": OLLAMA_MODEL,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "stream": False,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            f"{OLLAMA_URL}/api/chat",
-            data=body,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode("utf-8"))["message"]["content"]
-    except Exception:
-        pass
+    ollama_errors: list[str] = []
+    for base_url in OLLAMA_URLS:
+        try:
+            body = json.dumps({
+                "model": OLLAMA_MODEL,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "stream": False,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"{base_url}/api/chat",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode("utf-8"))["message"]["content"]
+        except Exception as exc:
+            ollama_errors.append(f"{base_url}: {exc}")
 
     # Fallback: Groq (requiere GROQ_API_KEY)
     if not GROQ_API_KEY:
-        raise RuntimeError("Asistente IA no disponible. Configura OLLAMA_URL o GROQ_API_KEY.")
+        raise RuntimeError(f"Asistente IA no disponible. Revisa OLLAMA_URLS. Detalle: {' | '.join(ollama_errors[-3:])}")
     body = json.dumps({
         "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -563,7 +566,52 @@ def call_ai(system: str, user: str) -> str:
             return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 403 and "1010" in detail:
+            raise RuntimeError("Groq bloqueó la solicitud desde esta red (403/1010). Revisa Ollama interno o usa el modo local del asistente.")
         raise RuntimeError(f"Groq error {exc.code}: {detail}")
+
+
+def local_assistant_answer(question: str, ctx: dict) -> str:
+    q = question.lower()
+
+    def fmt(value) -> str:
+        return f"${money(value) / 1_000_000:.1f}M"
+
+    aging = ctx.get("aging") or {}
+    top_clients = ctx.get("top_clientes") or []
+    top_advisors = ctx.get("top_asesores") or []
+    total_saldo = money(ctx.get("total_saldo"))
+    total_vencido = money(ctx.get("total_vencido"))
+    pct_vencido = money(ctx.get("pct_vencido"))
+    fecha_corte = ctx.get("fecha_corte") or "sin fecha"
+    semaforo = "verde" if pct_vencido <= 8 else "amarillo" if pct_vencido <= 15 else "rojo"
+
+    def client_line(client: dict) -> str:
+        return f"{client.get('razon_social', 'Cliente')} ({fmt(client.get('total_vencido'))}, {money(client.get('dias_mora_max')):.0f} días, asesor {client.get('asesor_nombre', 'sin asesor')})"
+
+    def advisor_line(advisor: dict) -> str:
+        return f"{advisor.get('nombre', 'Asesor')} ({fmt(advisor.get('vencido') or advisor.get('total'))} vencido, {money(advisor.get('pct_vencido')) * 100:.0f}%)"
+
+    if any(term in q for term in ["primero", "prioridad", "llamar", "cobrar"]):
+        clients = "; ".join(client_line(c) for c in top_clients[:4]) or "no hay clientes críticos visibles"
+        return f"Prioridad de contacto: {clients}. Empieza por los mayores saldos vencidos y más días de mora, validando si ya pagaron antes de ofrecer acuerdo. Corte: {fecha_corte}."
+
+    if any(term in q for term in ["asesor", "crítico", "critico", "riesgo"]):
+        advisors = "; ".join(advisor_line(a) for a in top_advisors[:4]) or "no hay asesores críticos visibles"
+        return f"Los asesores con mayor presión de cartera son: {advisors}. Recomiendo revisar sus clientes vencidos de mayor saldo y activar seguimiento diario hasta normalizar pagos."
+
+    if any(term in q for term in ["90", "+90", "noventa"]):
+        over_90 = money(aging.get("90_plus") or aging.get("91_120") or 0) + money(aging.get("121_180")) + money(aging.get("181_plus"))
+        return f"La cartera superior a 90 días está en {fmt(over_90)} según la vista actual. Si ese valor es bajo, el foco operativo debe estar en 1-30 y 31-60 días para evitar que escale."
+
+    if any(term in q for term in ["semáforo", "semaforo", "verde", "amarillo", "rojo"]):
+        return f"El semáforo está en {semaforo}: cartera vencida {fmt(total_vencido)} sobre saldo total {fmt(total_saldo)}, equivalente a {pct_vencido:.1f}%. Si supera 15%, lo trataría como alerta roja operativa."
+
+    if any(term in q for term in ["resumen", "ejecutivo", "estado", "cómo está", "como esta"]):
+        top = client_line(top_clients[0]) if top_clients else "sin cliente crítico destacado"
+        return f"Resumen al corte {fecha_corte}: saldo total {fmt(total_saldo)}, vencido {fmt(total_vencido)} ({pct_vencido:.1f}%) y semáforo {semaforo}. El principal foco es {top}. Recomiendo priorizar llamadas a los mayores saldos vencidos y cerrar compromisos de pago documentados."
+
+    return "Puedo ayudarte con cartera, cobranzas, clientes, asesores, facturas vencidas y prioridades del dashboard. Con los datos actuales, la acción más útil es priorizar clientes por saldo vencido, días de mora y asesor responsable."
 
 
 def confirm_import(token: str, use_n8n: bool = False) -> dict:
@@ -973,7 +1021,10 @@ Reglas de respuesta:
 - Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
 - Máximo 4 oraciones salvo que pidan análisis completo."""
 
-                answer = call_ai(system_prompt, question)
+                try:
+                    answer = call_ai(system_prompt, question)
+                except Exception:
+                    answer = local_assistant_answer(question, ctx)
                 json_response(self, 200, {"answer": answer})
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
