@@ -40,6 +40,8 @@ load_env()
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_URLS = [url.strip().rstrip("/") for url in os.environ.get("OLLAMA_URLS", OLLAMA_URL).split(",") if url.strip()]
@@ -143,6 +145,18 @@ def post_json_to_n8n(url: str, payload: dict, timeout: int = 60) -> dict:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"n8n respondió {exc.code}: {detail}")
+
+
+def response_output_text(payload: dict) -> str:
+    if payload.get("output_text"):
+        return str(payload["output_text"]).strip()
+    parts: list[str] = []
+    for item in payload.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            text = content.get("text")
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts).strip()
 
 
 def supabase_get(table: str, query: str) -> list[dict]:
@@ -526,6 +540,32 @@ def build_whatsapp_payload(nit: str, requested_by: str = "dashboard") -> dict:
 
 
 def call_ai(system: str, user: str) -> str:
+    if OPENAI_API_KEY:
+        body = json.dumps({
+            "model": OPENAI_MODEL,
+            "instructions": system,
+            "input": user,
+            "max_output_tokens": 900,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                text = response_output_text(json.loads(resp.read().decode("utf-8")))
+                if text:
+                    return text
+                raise RuntimeError("OpenAI no devolvió texto en la respuesta.")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI error {exc.code}: {detail}")
+
     # Intenta Ollama primero (interno, sin API key)
     ollama_errors: list[str] = []
     for base_url in OLLAMA_URLS:
