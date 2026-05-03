@@ -431,7 +431,10 @@
             <input id="xlsxFile" name="file" type="file" accept=".xlsx" />
             <button type="submit">Validar archivo</button>
           </form>
-          <pre id="importResult" class="import-result">Esperando archivo…</pre>
+          <div id="importResult" class="import-result import-empty">
+            <strong>Esperando archivo</strong>
+            <span>Selecciona el Excel exportado desde Siigo para validar el corte antes de actualizar Supabase.</span>
+          </div>
           <div id="importConfirm" class="import-confirm">
             <p id="importConfirmMsg">Validación exitosa. ¿Confirmar importación a Supabase?</p>
             <small id="importConfirmDetail"></small>

@@ -43,6 +43,15 @@ function setText(id, value) {
   if (element) element.textContent = value;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function status(text) {
   setText("syncState", text);
 }
@@ -660,7 +669,6 @@ function clientCards(rows) {
     .map((client) => {
       const overdue = amount(client.total_vencido);
       const phone = cleanPhone(client.telefono || client.telefono_2);
-      const waText = encodeURIComponent(`Hola ${client.razon_social}, le contactamos de COPACOL sobre su estado de cartera.`);
       return `
         <article class="client-card ${client.prioridad === "Alta" ? "hot" : ""}" data-nit="${client.nit}">
           <div class="client-top">
@@ -676,7 +684,7 @@ function clientCards(rows) {
           </div>
           <div class="client-actions" aria-label="Acciones rápidas">
             ${phone ? `<a href="tel:+${phone}" title="Llamar">Tel</a>` : `<span title="Sin teléfono">Tel</span>`}
-            ${phone ? `<a href="https://wa.me/${phone}?text=${waText}" target="_blank" rel="noreferrer" title="WhatsApp">WA</a>` : `<span title="Sin WhatsApp">WA</span>`}
+            ${phone ? `<button class="whatsapp-trigger" data-nit="${client.nit}" title="Preparar WhatsApp en n8n">WA</button>` : `<span title="Sin WhatsApp">WA</span>`}
             <button class="drawer-trigger" data-nit="${client.nit}" title="Ver ficha completa">Ficha</button>
           </div>
         </article>
@@ -695,29 +703,114 @@ function renderClients() {
       openClientDrawer(btn.dataset.nit);
     });
   });
+  $("clientGrid").querySelectorAll(".whatsapp-trigger").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      triggerWhatsAppFlow(btn.dataset.nit, btn);
+    });
+  });
 }
 
 async function previewImport(event) {
   event.preventDefault();
   const file = $("xlsxFile").files[0];
   if (!file) {
-    $("importResult").textContent = "Selecciona un archivo .xlsx.";
+    renderImportMessage("Selecciona un archivo .xlsx.", "El sistema validará estructura, corte y totales antes de permitir la importación.", "warn");
     return;
   }
-  $("importResult").textContent = "Validando archivo...";
+  renderImportMessage("Validando archivo", "Estamos revisando columnas, corte, facturas, clientes y montos. Esto toma unos segundos.", "loading");
   $("importConfirm").classList.remove("visible");
   importToken = null;
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch("/api/import/preview", { method: "POST", body: formData });
-  const result = await response.json();
-  $("importResult").textContent = JSON.stringify(result, null, 2);
-  if (result.token) {
-    importToken = result.token;
-    setText("importConfirmMsg", `Validación exitosa: ${number.format(result.facturas)} facturas, ${number.format(result.clientes)} clientes · ${moneyM(result.saldo_total)}`);
-    setText("importConfirmDetail", `Corte detectado: ${result.fecha_corte_detectada || "no detectado"} · ${number.format(result.vendedores)} vendedores`);
-    $("importConfirm").classList.add("visible");
+  try {
+    const response = await fetch("/api/import/preview", { method: "POST", body: formData });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "No se pudo validar el archivo");
+    renderImportPreview(result);
+    if (result.token) {
+      importToken = result.token;
+      setText("importConfirmMsg", `Importación lista para confirmar`);
+      const route = supabaseConfig?.n8n_import_enabled ? "Al confirmar se enviará al flujo n8n de ingesta y luego se recargará el tablero." : "Al confirmar se actualizará Supabase desde el backend y luego se recargará el tablero.";
+      setText("importConfirmDetail", `${number.format(result.facturas)} facturas · ${number.format(result.clientes)} clientes · ${moneyM(result.saldo_total)} · ${route}`);
+      $("importConfirm").classList.add("visible");
+    }
+  } catch (err) {
+    renderImportMessage("No se pudo validar el archivo", err.message, "error");
   }
+}
+
+function renderImportMessage(title, detail, tone = "info") {
+  const el = $("importResult");
+  el.className = `import-result import-empty ${tone}`;
+  el.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(detail)}</span>
+  `;
+}
+
+function renderImportPreview(result) {
+  const aging = result.aging || {};
+  const agingTotal = Object.values(aging).reduce((sum, value) => sum + amount(value), 0) || 1;
+  const agingRows = Object.entries(aging)
+    .filter(([, value]) => amount(value) !== 0)
+    .map(([key, value]) => {
+      const label = agingLabels[key]?.[0] || key;
+      const width = Math.max(4, (amount(value) / agingTotal) * 100);
+      return `
+        <div class="import-aging-row">
+          <div><strong>${escapeHtml(label)}</strong><span>${moneyM(value)}</span></div>
+          <div class="import-track"><i style="width:${width}%"></i></div>
+        </div>
+      `;
+    })
+    .join("");
+  const clients = (result.top_clientes || []).slice(0, 5).map((client) => `
+    <tr>
+      <td>${escapeHtml(client.razon_social || "Cliente")}</td>
+      <td>${number.format(amount(client.facturas))}</td>
+      <td>${moneyM(client.saldo)}</td>
+    </tr>
+  `).join("");
+  const sellers = (result.top_vendedores || []).slice(0, 5).map((seller) => `
+    <tr>
+      <td>${escapeHtml(seller.vendedor || "Asesor")}</td>
+      <td>${moneyM(seller.saldo)}</td>
+    </tr>
+  `).join("");
+
+  const el = $("importResult");
+  el.className = "import-result import-preview";
+  el.innerHTML = `
+    <div class="import-status-head">
+      <div>
+        <p class="eyebrow">Validación completada</p>
+        <h3>Corte ${escapeHtml(result.fecha_corte_detectada || "sin fecha detectada")}</h3>
+        <span>El archivo cumple la estructura esperada de Siigo.</span>
+      </div>
+      <strong>Aprobado</strong>
+    </div>
+    <div class="import-kpis">
+      <article><span>Saldo total</span><strong>${moneyM(result.saldo_total)}</strong></article>
+      <article><span>Facturas</span><strong>${number.format(result.facturas || 0)}</strong></article>
+      <article><span>Clientes</span><strong>${number.format(result.clientes || 0)}</strong></article>
+      <article><span>Vendedores</span><strong>${number.format(result.vendedores || 0)}</strong></article>
+    </div>
+    <div class="import-preview-grid">
+      <section>
+        <h4>Distribución por edad</h4>
+        <div class="import-aging">${agingRows || "<p>Sin saldos detectados.</p>"}</div>
+      </section>
+      <section>
+        <h4>Clientes con mayor saldo</h4>
+        <table class="import-mini-table"><tbody>${clients || "<tr><td>Sin clientes detectados.</td></tr>"}</tbody></table>
+      </section>
+      <section>
+        <h4>Vendedores principales</h4>
+        <table class="import-mini-table"><tbody>${sellers || "<tr><td>Sin vendedores detectados.</td></tr>"}</tbody></table>
+      </section>
+    </div>
+  `;
 }
 
 function rerenderFilteredViews() {
@@ -900,7 +993,6 @@ function renderDrawer(payload) {
   $("drawerMeta").textContent = `NIT ${client.nit || "-"} · ${client.ciudad || "Sin ciudad"}`;
 
   const phone = cleanPhone(client.telefono || client.telefono_2 || "");
-  const waText = encodeURIComponent(`Hola ${name}, le contactamos de COPACOL sobre su estado de cartera.`);
 
   const kpisHtml = `
     <div class="drawer-kpis">
@@ -921,7 +1013,7 @@ function renderDrawer(payload) {
     <div class="drawer-actions-row">
       <button class="drawer-action-btn" id="registerGestionBtn">+ Registrar gestión</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
-      ${phone ? `<a href="https://wa.me/${phone}?text=${waText}" target="_blank" rel="noreferrer" class="drawer-action-btn">WhatsApp</a>` : ""}
+      ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
     </div>`;
 
   const overdueInvs = invoices.filter((inv) => Number(inv.dias_mora || 0) > 0).slice(0, 15);
@@ -953,12 +1045,44 @@ function renderDrawer(payload) {
 
   $("drawerBody").innerHTML = kpisHtml + infoHtml + actionsHtml + invoicesHtml + historyHtml;
   $("registerGestionBtn").addEventListener("click", () => openContactModal(client.nit, name));
+  const waBtn = $("triggerWhatsAppBtn");
+  if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
 }
 
 function closeClientDrawer() {
   $("drawerBackdrop").style.display = "none";
   $("clientDrawer").style.display = "none";
   drawerNit = null;
+}
+
+async function triggerWhatsAppFlow(nit, button) {
+  if (!nit || !button) return;
+  const original = button.textContent;
+  const user = JSON.parse(sessionStorage.getItem("copacol_user") || "{}");
+  button.disabled = true;
+  button.textContent = "Enviando…";
+  try {
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}/whatsapp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requested_by: user.email || "dashboard" }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo iniciar WhatsApp");
+    button.textContent = "Listo";
+    status(`WhatsApp preparado para ${data.cliente || nit}`);
+    setTimeout(() => {
+      button.textContent = original;
+      button.disabled = false;
+    }, 1800);
+  } catch (err) {
+    button.textContent = "Error";
+    status(err.message);
+    setTimeout(() => {
+      button.textContent = original;
+      button.disabled = false;
+    }, 2400);
+  }
 }
 
 // ── Contact modal ─────────────────────────────────────────────────────────────
@@ -1011,7 +1135,7 @@ async function saveContact() {
 async function confirmImport() {
   if (!importToken) return;
   $("confirmImportBtn").disabled = true;
-  $("confirmImportBtn").textContent = "Importando…";
+  $("confirmImportBtn").textContent = supabaseConfig?.n8n_import_enabled ? "Enviando a n8n…" : "Importando…";
   try {
     const res = await fetch("/api/import/confirm", {
       method: "POST",
@@ -1020,7 +1144,7 @@ async function confirmImport() {
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || "Error en importación");
-    $("importResult").textContent = JSON.stringify(result, null, 2);
+    renderImportMessage("Importación finalizada", result.message || "Supabase fue actualizado y el tablero se está recargando.", "success");
     $("importConfirm").classList.remove("visible");
     importToken = null;
     loadDashboard().catch((err) => status(err.message));

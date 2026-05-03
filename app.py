@@ -44,6 +44,8 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 N8N_API_TOKEN = os.environ.get("N8N_API_TOKEN", "")
+N8N_IMPORT_WEBHOOK_URL = os.environ.get("N8N_IMPORT_WEBHOOK_URL", "").strip()
+N8N_PROACTIVE_WEBHOOK_URL = os.environ.get("N8N_PROACTIVE_WEBHOOK_URL", "").strip()
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -57,6 +59,89 @@ def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | 
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def extract_multipart_file(body: bytes, content_type: str) -> tuple[bytes | None, str]:
+    boundary_match = re.search("boundary=(.+)", content_type)
+    if not boundary_match:
+        return None, "cartera-siigo.xlsx"
+    boundary = ("--" + boundary_match.group(1)).encode("utf-8")
+    for part in body.split(boundary):
+        if b'filename="' not in part:
+            continue
+        header_end = part.find(b"\r\n\r\n")
+        if header_end == -1:
+            continue
+        headers = part[:header_end].decode("utf-8", errors="replace")
+        filename_match = re.search(r'filename="([^"]+)"', headers)
+        filename = filename_match.group(1) if filename_match else "cartera-siigo.xlsx"
+        return part[header_end + 4:].rstrip(b"\r\n--"), filename
+    return None, "cartera-siigo.xlsx"
+
+
+def send_file_to_n8n(file_bytes: bytes, filename: str) -> dict:
+    if not N8N_IMPORT_WEBHOOK_URL:
+        raise RuntimeError("N8N_IMPORT_WEBHOOK_URL no está configurado.")
+
+    boundary = f"----copacol-{uuid.uuid4().hex}"
+    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    parts = [
+        f"--{boundary}",
+        f'Content-Disposition: form-data; name="attachment_0"; filename="{filename}"',
+        f"Content-Type: {content_type}",
+        "",
+    ]
+    body = "\r\n".join(parts).encode("utf-8") + b"\r\n" + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Accept": "application/json",
+    }
+    if N8N_API_TOKEN:
+        headers["Authorization"] = f"Bearer {N8N_API_TOKEN}"
+
+    req = urllib.request.Request(
+        N8N_IMPORT_WEBHOOK_URL,
+        data=body,
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            if not raw:
+                return {"status": "accepted", "message": "n8n recibió el archivo sin cuerpo de respuesta."}
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {"status": "accepted", "message": raw}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"n8n respondió {exc.code}: {detail}")
+
+
+def post_json_to_n8n(url: str, payload: dict, timeout: int = 60) -> dict:
+    if not url:
+        raise RuntimeError("Webhook de n8n no configurado.")
+    body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if N8N_API_TOKEN:
+        headers["Authorization"] = f"Bearer {N8N_API_TOKEN}"
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            if not raw:
+                return {"status": "received", "message": "n8n recibió la solicitud sin cuerpo de respuesta."}
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {"status": "received", "message": raw}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"n8n respondió {exc.code}: {detail}")
 
 
 def supabase_get(table: str, query: str) -> list[dict]:
@@ -399,6 +484,46 @@ def build_client_payload(nit: str) -> dict:
     }
 
 
+def build_whatsapp_payload(nit: str, requested_by: str = "dashboard") -> dict:
+    payload = build_client_payload(nit)
+    client = payload.get("client") or {}
+    if not client:
+        raise ValueError("Cliente no encontrado.")
+    phone = client.get("telefono") or client.get("telefono_2") or ""
+    overdue = [
+        inv for inv in payload.get("invoices", [])
+        if money(inv.get("dias_mora")) > 0
+    ]
+    return {
+        "action": "whatsapp_context_request",
+        "source": "copacol_dashboard",
+        "requested_at": datetime.now().isoformat(),
+        "requested_by": requested_by or "dashboard",
+        "telefono": phone,
+        "client": client,
+        "invoices": payload.get("invoices", []),
+        "overdue_invoices": sorted(overdue, key=lambda inv: money(inv.get("dias_mora")), reverse=True)[:20],
+        "promises": payload.get("promises", []),
+        "payments": payload.get("payments", []),
+        "contacts": payload.get("contacts", []),
+        "ai_context": {
+            "cliente": client.get("razon_social"),
+            "nit": client.get("nit"),
+            "telefono": phone,
+            "asesor": client.get("asesor_nombre"),
+            "saldo_total": client.get("total_saldo"),
+            "saldo_vencido": client.get("total_vencido"),
+            "saldo_vigente": client.get("total_vigente"),
+            "facturas": client.get("num_facturas"),
+            "facturas_vencidas": client.get("num_vencidas"),
+            "dias_mora_max": client.get("dias_mora_max"),
+            "etapa_cobranza": client.get("etapa_cobranza"),
+            "fecha_corte": client.get("fecha_corte"),
+            "ultimas_gestiones": payload.get("contacts", [])[:5],
+        },
+    }
+
+
 def call_ai(system: str, user: str) -> str:
     # Intenta Ollama primero (interno, sin API key)
     try:
@@ -441,10 +566,25 @@ def call_ai(system: str, user: str) -> str:
         raise RuntimeError(f"Groq error {exc.code}: {detail}")
 
 
-def confirm_import(token: str) -> dict:
+def confirm_import(token: str, use_n8n: bool = False) -> dict:
     entry = IMPORT_CACHE.get(token)
     if not entry:
         raise ValueError("Token de importación inválido o expirado.")
+
+    if use_n8n:
+        file_bytes = entry.get("file_bytes")
+        if not file_bytes:
+            raise ValueError("El archivo original ya no está disponible para enviarlo a n8n. Vuelve a validar el XLSX.")
+        result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx")
+        del IMPORT_CACHE[token]
+        if isinstance(result, list):
+            result = result[0] if result else {"status": "accepted"}
+        if not isinstance(result, dict):
+            result = {"status": "accepted", "message": str(result)}
+        result.setdefault("status", "imported")
+        result.setdefault("message", "Archivo enviado a n8n. Supabase fue actualizado por el flujo de ingesta.")
+        result["via"] = "n8n"
+        return result
 
     records = entry["records"]
     by_client = entry["by_client"]
@@ -697,7 +837,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/config":
-            json_response(self, 200, {"supabase_url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY})
+            json_response(
+                self,
+                200,
+                {
+                    "supabase_url": SUPABASE_URL,
+                    "anon_key": SUPABASE_ANON_KEY,
+                    "n8n_import_enabled": bool(N8N_IMPORT_WEBHOOK_URL),
+                    "n8n_proactive_enabled": bool(N8N_PROACTIVE_WEBHOOK_URL),
+                },
+            )
             return
 
         if parsed.path.startswith("/api/client/"):
@@ -730,7 +879,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
-                json_response(self, 200, confirm_import(data.get("token", "")))
+                json_response(self, 200, confirm_import(data.get("token", ""), use_n8n=bool(N8N_IMPORT_WEBHOOK_URL)))
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return
@@ -743,6 +892,27 @@ class Handler(BaseHTTPRequestHandler):
                 row = {**data, "nit": nit, "created_at": data.get("created_at") or datetime.now().isoformat()}
                 result = supabase_insert("copacol_log_contactos", row)
                 json_response(self, 200, {"status": "ok", "data": result})
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
+            return
+
+        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/whatsapp"):
+            nit = parsed.path[len("/api/client/"):-len("/whatsapp")]
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                payload = build_whatsapp_payload(nit, data.get("requested_by") or "dashboard")
+                result = post_json_to_n8n(N8N_PROACTIVE_WEBHOOK_URL, payload)
+                json_response(self, 200, {
+                    "status": result.get("status", "received"),
+                    "message": result.get("message", "Contexto enviado al flujo proactivo."),
+                    "workflow": result.get("workflow", "COPACOL_Cobranza_Proactivo"),
+                    "nit": payload["client"].get("nit"),
+                    "cliente": payload["client"].get("razon_social"),
+                    "telefono": payload.get("telefono"),
+                    "via": "n8n",
+                    "n8n": result,
+                })
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return
@@ -821,16 +991,7 @@ Reglas de respuesta:
             if "openxmlformats" in content_type or "octet-stream" in content_type or "excel" in content_type:
                 file_bytes = body
             elif "multipart/form-data" in content_type:
-                boundary_match = re.search("boundary=(.+)", content_type)
-                if boundary_match:
-                    boundary = ("--" + boundary_match.group(1)).encode("utf-8")
-                    for part in body.split(boundary):
-                        if b'filename="' not in part:
-                            continue
-                        header_end = part.find(b"\r\n\r\n")
-                        if header_end != -1:
-                            file_bytes = part[header_end + 4:].rstrip(b"\r\n--")
-                            break
+                file_bytes, _ = extract_multipart_file(body, content_type)
             if not file_bytes:
                 json_response(self, 400, {"error": "No se encontro archivo xlsx en la solicitud."})
                 return
@@ -862,19 +1023,7 @@ Reglas de respuesta:
                     return
                 file_bytes = base64.b64decode(file_b64)
             elif "multipart/form-data" in content_type:
-                boundary_match = re.search("boundary=(.+)", content_type)
-                if not boundary_match:
-                    json_response(self, 400, {"error": "No se encontro boundary."})
-                    return
-                boundary = ("--" + boundary_match.group(1)).encode("utf-8")
-                for part in body.split(boundary):
-                    if b'filename="' not in part:
-                        continue
-                    header_end = part.find(b"\r\n\r\n")
-                    if header_end == -1:
-                        continue
-                    file_bytes = part[header_end + 4:].rstrip(b"\r\n--")
-                    break
+                file_bytes, _ = extract_multipart_file(body, content_type)
             elif "openxmlformats" in content_type or "octet-stream" in content_type or "excel" in content_type:
                 # Binary body enviado directamente por n8n (contentType: binaryData)
                 file_bytes = body
@@ -908,21 +1057,7 @@ Reglas de respuesta:
             json_response(self, 400, {"error": "Envia el archivo como multipart/form-data."})
             return
 
-        boundary_match = re.search("boundary=(.+)", content_type)
-        if not boundary_match:
-            json_response(self, 400, {"error": "No se encontro boundary del formulario."})
-            return
-
-        boundary = ("--" + boundary_match.group(1)).encode("utf-8")
-        file_bytes = None
-        for part in body.split(boundary):
-            if b'filename="' not in part:
-                continue
-            header_end = part.find(b"\r\n\r\n")
-            if header_end == -1:
-                continue
-            file_bytes = part[header_end + 4 :].rstrip(b"\r\n--")
-            break
+        file_bytes, filename = extract_multipart_file(body, content_type)
 
         if not file_bytes:
             json_response(self, 400, {"error": "No se encontro archivo en la solicitud."})
@@ -934,6 +1069,8 @@ Reglas de respuesta:
                 tmp_path = Path(tmp.name)
             preview = parse_xlsx(tmp_path)
             tmp_path.unlink(missing_ok=True)
+            IMPORT_CACHE[preview["token"]]["file_bytes"] = file_bytes
+            IMPORT_CACHE[preview["token"]]["filename"] = filename
             json_response(self, 200, preview)
         except Exception as exc:
             json_response(self, 400, {"error": str(exc)})

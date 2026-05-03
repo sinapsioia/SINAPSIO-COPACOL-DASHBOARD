@@ -778,7 +778,7 @@ tbody tr:hover td { background: var(--surface-2); }
 .client-split { color: var(--ink-3); font-size: 12px; }
 .client-split span { display: grid; }
 .client-actions { display: flex; gap: 8px; }
-.client-actions a, .client-actions span {
+.client-actions a, .client-actions span, .client-actions button {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 42px; height: 32px; padding: 0 10px;
   border-radius: var(--radius-sm);
@@ -786,7 +786,8 @@ tbody tr:hover td { background: var(--surface-2); }
   text-decoration: none; font-size: 12px; font-weight: 600;
   border: 1px solid var(--border); transition: all 160ms;
 }
-.client-actions a:hover { background: var(--brand-500); color: white; border-color: var(--brand-500); }
+.client-actions a:hover, .client-actions button:hover { background: var(--brand-500); color: white; border-color: var(--brand-500); }
+.client-actions button:disabled, .drawer-action-btn:disabled { opacity: .65; cursor: wait; }
 .client-actions .bot-disabled { background: var(--accent-50); color: var(--accent); border-color: var(--accent-soft); }
 
 /* ============================================
@@ -804,9 +805,127 @@ input[type="file"] {
   font: 13px var(--font-sans);
 }
 .import-result {
-  grid-column: 1 / -1; max-height: 300px; overflow: auto;
-  background: #141310; color: #d9f2e4; padding: 16px;
-  border-radius: var(--radius-sm); font: 13px var(--font-mono);
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-1);
+}
+.import-empty {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 18px;
+  background: var(--surface-2);
+}
+.import-empty strong {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+}
+.import-empty span { color: var(--ink-3); font-size: 13px; line-height: 1.5; }
+.import-empty.loading { border-color: var(--brand-100); background: var(--brand-50); }
+.import-empty.warn { border-color: var(--accent-soft); background: var(--accent-50); }
+.import-empty.error { border-color: #fbbdba; background: var(--danger-soft); }
+.import-empty.success { border-color: #b7f3cb; background: var(--success-soft); }
+.import-preview { padding: 0; overflow: hidden; }
+.import-status-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding: 20px 22px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(145deg, var(--surface), var(--success-soft));
+}
+.import-status-head h3 {
+  margin: 4px 0 6px;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 500;
+}
+.import-status-head span { color: var(--ink-3); font-size: 13px; }
+.import-status-head > strong {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--success);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+.import-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+.import-kpis article {
+  padding: 18px 20px;
+  border-right: 1px solid var(--border);
+}
+.import-kpis article:last-child { border-right: 0; }
+.import-kpis span {
+  display: block;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.import-kpis strong {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 500;
+}
+.import-preview-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr;
+  gap: 18px;
+  padding: 20px 22px 22px;
+}
+.import-preview-grid section { min-width: 0; }
+.import-preview-grid h4 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.import-aging { display: grid; gap: 12px; }
+.import-aging-row { display: grid; gap: 7px; }
+.import-aging-row div:first-child {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  color: var(--ink-2); font-size: 13px;
+}
+.import-aging-row span { color: var(--ink-3); font-size: 12px; }
+.import-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.import-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-500);
+}
+.import-mini-table {
+  min-width: 0;
+  width: 100%;
+  border-collapse: collapse;
+}
+.import-mini-table td {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.import-mini-table td:first-child {
+  max-width: 230px;
+  padding-right: 12px;
+  color: var(--ink-1);
+  font-weight: 600;
+}
+.import-mini-table td:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ============================================
@@ -1177,18 +1296,20 @@ input[type="file"] {
    IMPORT CONFIRM
    ============================================ */
 .import-confirm {
-  margin-top: 12px; padding: 16px;
-  background: var(--success-soft); border: 1px solid #b7f3cb;
+  margin-top: 12px; padding: 18px;
+  background: linear-gradient(145deg, var(--success-soft), #fff);
+  border: 1px solid #b7f3cb;
   border-radius: var(--radius-sm);
   display: none; flex-direction: column; gap: 10px;
+  box-shadow: inset 4px 0 0 var(--success);
 }
 .import-confirm.visible { display: flex; }
-.import-confirm p { font-size: 13px; color: var(--success); font-weight: 600; margin: 0; }
-.import-confirm small { font-size: 12px; color: var(--ink-3); }
+.import-confirm p { font-size: 15px; color: var(--ink-1); font-weight: 700; margin: 0; }
+.import-confirm small { max-width: 760px; font-size: 13px; color: var(--ink-3); line-height: 1.5; }
 .confirm-btn {
   background: var(--success); color: white;
   border: none; border-radius: var(--radius-sm);
-  padding: 0 18px; min-height: 38px;
+  padding: 0 18px; min-height: 42px;
   font: 600 13px var(--font-sans); cursor: pointer;
   width: fit-content;
   transition: background 160ms;
@@ -1220,6 +1341,9 @@ input[type="file"] {
   .insight-grid, .modal-kpis, .filters, .import-panel {
     grid-template-columns: 1fr;
   }
+  .import-kpis, .import-preview-grid { grid-template-columns: 1fr; }
+  .import-kpis article { border-right: 0; border-bottom: 1px solid var(--border); }
+  .import-kpis article:last-child { border-bottom: 0; }
   .executive-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .donut-row { justify-items: center; }
   .donut.big { width: min(180px,70vw); height: min(180px,70vw); }
