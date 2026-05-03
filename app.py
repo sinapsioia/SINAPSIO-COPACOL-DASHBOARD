@@ -578,8 +578,11 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
         return f"${money(value) / 1_000_000:.1f}M"
 
     aging = ctx.get("aging") or {}
+    condition_mix = ctx.get("condition_mix") or []
     top_clients = ctx.get("top_clientes") or []
+    pareto_clients = ctx.get("pareto_clientes") or top_clients
     top_advisors = ctx.get("top_asesores") or []
+    overdue_invoices = ctx.get("facturas_vencidas_top") or []
     total_saldo = money(ctx.get("total_saldo"))
     total_vencido = money(ctx.get("total_vencido"))
     pct_vencido = money(ctx.get("pct_vencido"))
@@ -591,6 +594,31 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
 
     def advisor_line(advisor: dict) -> str:
         return f"{advisor.get('nombre', 'Asesor')} ({fmt(advisor.get('vencido') or advisor.get('total'))} vencido, {money(advisor.get('pct_vencido')) * 100:.0f}%)"
+
+    def invoice_line(invoice: dict) -> str:
+        return f"{invoice.get('numero_factura', 'Factura')} de {invoice.get('cliente', 'cliente sin nombre')} por {fmt(invoice.get('monto'))}, vencida el {invoice.get('fecha_vencimiento') or 'sin fecha'} con {money(invoice.get('dias_mora')):.0f} días de mora"
+
+    if any(term in q for term in ["pareto", "80/20", "80 20"]):
+        top = "; ".join(
+            f"{c.get('razon_social', 'Cliente')} aporta {fmt(c.get('total_vencido'))} ({money(c.get('pct_vencido_total')) * 100:.1f}% del vencido)"
+            for c in pareto_clients[:5]
+        ) or "no hay clientes vencidos para calcular Pareto"
+        pct_top10 = money(ctx.get("concentracion_top10_pct")) * 100
+        return f"El Pareto de clientes muestra qué pocos clientes concentran la mayor parte de la cartera vencida. En esta vista, el top 10 concentra cerca del {pct_top10:.1f}% del saldo total; los principales son: {top}. Sirve para priorizar gestión donde cada llamada mueve más dinero."
+
+    if any(term in q for term in ["composición", "composicion", "compuesta", "mix", "condición", "condicion"]):
+        aging_txt = ", ".join(f"{key}: {fmt(value)}" for key, value in aging.items() if money(value)) or "sin distribución por edad"
+        cond_txt = ", ".join(
+            f"{item.get('condicion', 'sin condición')}: {fmt(item.get('saldo'))}"
+            for item in condition_mix[:5]
+        ) or "sin composición por condición de pago"
+        return f"La cartera se compone así: vigente {fmt(ctx.get('total_vigente'))} y vencida {fmt(total_vencido)} sobre {fmt(total_saldo)} total. Por edad: {aging_txt}. Por condición de pago: {cond_txt}."
+
+    if any(term in q for term in ["factura más vieja", "factura mas vieja", "más antigua", "mas antigua", "mayor mora", "factura vieja"]):
+        if overdue_invoices:
+            oldest = sorted(overdue_invoices, key=lambda inv: money(inv.get("dias_mora")), reverse=True)[0]
+            return f"La factura vencida más vieja en la vista actual es {invoice_line(oldest)}. Recomiendo revisarla primero con el asesor {oldest.get('asesor_nombre', 'sin asesor')} y confirmar si existe pago no aplicado o promesa documentada."
+        return "No encontré facturas vencidas en el contexto actual. Revisa si los filtros del dashboard están limitando la cartera visible."
 
     if any(term in q for term in ["primero", "prioridad", "llamar", "cobrar"]):
         clients = "; ".join(client_line(c) for c in top_clients[:4]) or "no hay clientes críticos visibles"
@@ -990,6 +1018,18 @@ class Handler(BaseHTTPRequestHandler):
                     f"- {k}: {fmt(money(v))}"
                     for k, v in (ctx.get("aging") or {}).items()
                 )
+                condition_txt = "\n".join(
+                    f"- {c.get('condicion','sin condición')}: {fmt(money(c.get('saldo')))}"
+                    for c in (ctx.get("condition_mix") or [])[:8]
+                )
+                pareto_txt = "\n".join(
+                    f"- {c.get('razon_social','?')}: {fmt(money(c.get('total_vencido')))} vencido ({money(c.get('pct_vencido_total'))*100:.1f}% del vencido), {c.get('dias_mora_max',0):.0f} días, asesor {c.get('asesor_nombre','?')}"
+                    for c in (ctx.get("pareto_clientes") or [])[:10]
+                )
+                invoices_txt = "\n".join(
+                    f"- {inv.get('numero_factura','?')} · {inv.get('cliente','?')}: {fmt(money(inv.get('monto')))}, vence/venció {inv.get('fecha_vencimiento') or '-'}, {money(inv.get('dias_mora')):.0f} días, asesor {inv.get('asesor_nombre','?')}"
+                    for inv in (ctx.get("facturas_vencidas_top") or [])[:10]
+                )
                 pct_vencido = money(ctx.get("pct_vencido", 0))
                 semaforo = "🟢 Verde" if pct_vencido <= 8 else "🟡 Amarillo" if pct_vencido <= 15 else "🔴 Rojo"
 
@@ -1009,8 +1049,17 @@ DATOS ACTUALES (corte: {ctx.get('fecha_corte') or 'sin fecha'}):
 DISTRIBUCIÓN POR EDAD:
 {aging_txt}
 
+COMPOSICIÓN POR CONDICIÓN DE PAGO:
+{condition_txt}
+
 TOP CLIENTES CON MAYOR MORA:
 {clients_txt}
+
+PARETO DE CLIENTES VENCIDOS:
+{pareto_txt}
+
+FACTURAS VENCIDAS MÁS ANTIGUAS / CRÍTICAS:
+{invoices_txt}
 
 ASESORES:
 {asesores_txt}

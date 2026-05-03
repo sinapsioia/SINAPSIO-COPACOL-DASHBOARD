@@ -845,6 +845,31 @@ function buildAssistantContext() {
   if (!dashboard) return {};
   const view = dashboard.view || dashboard;
   const s = view.summary;
+  const overdueInvoices = [...(view.overdue_invoices || [])]
+    .sort((a, b) => amount(b.dias_mora) - amount(a.dias_mora) || amount(b.monto) - amount(a.monto))
+    .slice(0, 10)
+    .map((inv) => ({
+      numero_factura: inv.numero_factura,
+      cliente: inv.cliente,
+      nit: inv.nit,
+      monto: inv.monto,
+      dias_mora: inv.dias_mora,
+      fecha_vencimiento: inv.fecha_vencimiento,
+      asesor_nombre: inv.asesor_nombre,
+    }));
+  const paretoClientes = [...view.clients]
+    .filter((c) => amount(c.total_vencido) > 0)
+    .sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido))
+    .slice(0, 10)
+    .map((c) => ({
+      razon_social: c.razon_social,
+      nit: c.nit,
+      total_vencido: c.total_vencido,
+      total_saldo: c.total_saldo,
+      dias_mora_max: c.dias_mora_max,
+      asesor_nombre: c.asesor_nombre,
+      pct_vencido_total: s.total_vencido ? amount(c.total_vencido) / amount(s.total_vencido) : 0,
+    }));
   return {
     fecha_corte: s.fecha_corte,
     total_saldo: s.total_saldo,
@@ -856,6 +881,22 @@ function buildAssistantContext() {
     mora_promedio: s.mora_promedio,
     facturas_vencidas: s.facturas_vencidas,
     aging: view.aging,
+    condition_mix: view.condition_mix,
+    concentracion_top10: s.concentracion_top10,
+    concentracion_top10_pct: s.concentracion_top10_pct,
+    pareto_clientes: paretoClientes,
+    facturas_vencidas_top: overdueInvoices,
+    facturas_proximas: [...(view.due_soon || [])]
+      .sort((a, b) => amount(b.monto) - amount(a.monto))
+      .slice(0, 8)
+      .map((inv) => ({
+        numero_factura: inv.numero_factura,
+        cliente: inv.cliente,
+        monto: inv.monto,
+        dias_mora: inv.dias_mora,
+        fecha_vencimiento: inv.fecha_vencimiento,
+        asesor_nombre: inv.asesor_nombre,
+      })),
     top_clientes: [...view.clients]
       .filter((c) => amount(c.total_vencido) > 0)
       .sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido))
