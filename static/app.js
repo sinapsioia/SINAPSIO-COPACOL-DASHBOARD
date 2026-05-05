@@ -75,6 +75,18 @@ function formatDateTime(value) {
   return dateTime.format(date);
 }
 
+function signedNumber(value) {
+  const n = amount(value);
+  if (!n) return "Sin cambio";
+  return `${n > 0 ? "+" : ""}${number.format(n)}`;
+}
+
+function signedMoneyM(value) {
+  const n = amount(value);
+  if (!n) return "Sin cambio";
+  return `${n > 0 ? "+" : ""}${moneyM(n)}`;
+}
+
 function conditionValue(key) {
   return amount(((dashboard.view || dashboard).condition_mix.find((item) => item.condicion === key) || {}).saldo);
 }
@@ -790,6 +802,51 @@ function renderImportPreview(result) {
       <td>${moneyM(seller.saldo)}</td>
     </tr>
   `).join("");
+  const control = result.control_cambios || {};
+  const current = control.current || {};
+  const incoming = control.incoming || {};
+  const delta = control.delta || {};
+  const changeControl = `
+    <section class="import-change-control">
+      <div class="change-copy">
+        <p class="eyebrow">Control de cambios</p>
+        <h4>${escapeHtml(control.title || "Reemplazo completo")}</h4>
+        <span>${escapeHtml(control.description || "La cartera activa se actualizará con la plantilla confirmada.")}</span>
+      </div>
+      <div class="change-grid">
+        <article>
+          <span>Corte activo</span>
+          <strong>${escapeHtml(current.fecha_corte || "-")}</strong>
+          <em>${escapeHtml(current.ultima_actualizacion ? formatDateTime(current.ultima_actualizacion) : "Sin actualización registrada")}</em>
+        </article>
+        <article>
+          <span>Plantilla entrante</span>
+          <strong>${escapeHtml(incoming.fecha_corte || result.fecha_corte_detectada || "-")}</strong>
+          <em>Se convertirá en la cartera activa</em>
+        </article>
+        <article>
+          <span>Clientes</span>
+          <strong>${number.format(amount(current.clientes))} → ${number.format(amount(incoming.clientes))}</strong>
+          <em>${signedNumber(delta.clientes)}</em>
+        </article>
+        <article>
+          <span>Facturas</span>
+          <strong>${number.format(amount(current.facturas))} → ${number.format(amount(incoming.facturas))}</strong>
+          <em>${signedNumber(delta.facturas)}</em>
+        </article>
+        <article>
+          <span>Saldo total</span>
+          <strong>${moneyM(current.saldo_total)} → ${moneyM(incoming.saldo_total)}</strong>
+          <em>${signedMoneyM(delta.saldo_total)}</em>
+        </article>
+        <article>
+          <span>Vencido</span>
+          <strong>${moneyM(current.total_vencido)} → ${moneyM(incoming.total_vencido)}</strong>
+          <em>${signedMoneyM(delta.total_vencido)}</em>
+        </article>
+      </div>
+    </section>
+  `;
 
   const el = $("importResult");
   el.className = "import-result import-preview";
@@ -808,6 +865,7 @@ function renderImportPreview(result) {
       <article><span>Clientes</span><strong>${number.format(result.clientes || 0)}</strong></article>
       <article><span>Vendedores</span><strong>${number.format(result.vendedores || 0)}</strong></article>
     </div>
+    ${changeControl}
     <div class="import-preview-grid">
       <section>
         <h4>Distribución por edad</h4>

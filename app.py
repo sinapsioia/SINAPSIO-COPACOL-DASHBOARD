@@ -451,6 +451,49 @@ def build_dashboard_payload() -> dict:
     }
 
 
+def snapshot_control_from_preview(preview: dict) -> dict:
+    incoming = {
+        "fecha_corte": preview.get("fecha_corte_detectada"),
+        "facturas": preview.get("facturas") or 0,
+        "clientes": preview.get("clientes") or 0,
+        "saldo_total": money(preview.get("saldo_total")),
+        "total_vencido": sum(
+            money((preview.get("aging") or {}).get(key))
+            for key in ["1_30", "31_60", "61_90", "90_plus"]
+        ),
+        "total_vigente": money((preview.get("aging") or {}).get("vigente")),
+    }
+    try:
+        summary = build_dashboard_payload()["summary"]
+        current = {
+            "fecha_corte": summary.get("fecha_corte"),
+            "ultima_actualizacion": summary.get("ultima_actualizacion"),
+            "facturas": summary.get("facturas") or 0,
+            "clientes": summary.get("clientes") or 0,
+            "saldo_total": money(summary.get("total_saldo")),
+            "total_vencido": money(summary.get("total_vencido")),
+            "total_vigente": money(summary.get("total_vigente")),
+        }
+    except Exception:
+        current = {}
+
+    return {
+        "mode": "snapshot_replace",
+        "title": "Reemplazo completo de cartera activa",
+        "description": "Al confirmar, la cartera activa se reemplaza por esta plantilla. Los cortes anteriores no se mezclan con el nuevo tablero.",
+        "current": current,
+        "incoming": incoming,
+        "delta": {
+            key: money(incoming.get(key)) - money(current.get(key))
+            for key in ["saldo_total", "total_vencido", "total_vigente"]
+        }
+        | {
+            key: int(incoming.get(key) or 0) - int(current.get(key) or 0)
+            for key in ["facturas", "clientes"]
+        },
+    }
+
+
 def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase configuration")
@@ -947,7 +990,7 @@ def parse_xlsx(path: Path) -> dict:
         "created_at": datetime.now().isoformat(),
     }
 
-    return {
+    preview = {
         "status": "preview",
         "token": import_token,
         "fecha_corte_detectada": cut_date,
@@ -963,6 +1006,8 @@ def parse_xlsx(path: Path) -> dict:
         ],
         "message": "Validación lista. Confirma para escribir en Supabase.",
     }
+    preview["control_cambios"] = snapshot_control_from_preview(preview)
+    return preview
 
 
 class Handler(BaseHTTPRequestHandler):
