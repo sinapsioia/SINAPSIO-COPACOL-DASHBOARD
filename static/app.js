@@ -18,6 +18,7 @@ let currentPage = "tablero";
 let supabaseConfig = null;
 let importToken = null;
 let drawerNit = null;
+let importHistory = [];
 
 const agingLabels = {
   vigente: ["Vigente", "var(--green)"],
@@ -265,6 +266,21 @@ async function loadDashboard() {
   status("Datos actualizados");
 }
 
+async function loadImportHistory() {
+  const grid = $("historyGrid");
+  if (grid) grid.innerHTML = '<p class="drawer-empty">Cargando historial…</p>';
+  try {
+    const response = await fetch("/api/imports");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "No se pudo cargar historial");
+    importHistory = payload.batches || [];
+    renderImportHistory();
+  } catch (err) {
+    if (grid) grid.innerHTML = `<p class="drawer-empty">Error: ${escapeHtml(err.message)}</p>`;
+    setText("historyCount", "No se pudo cargar historial");
+  }
+}
+
 function hydrateFilters() {
   const current = $("sellerFilter").value || "all";
   const options = dashboard.sellers
@@ -319,6 +335,46 @@ function renderDashboard() {
   renderAdvisorTable();
   renderInvoices();
   renderClients();
+  renderImportHistory();
+}
+
+function renderImportHistory() {
+  const grid = $("historyGrid");
+  if (!grid) return;
+  setText("historyCount", importHistory.length ? `${number.format(importHistory.length)} plantillas registradas` : "Sin cargas registradas");
+  if (!importHistory.length) {
+    grid.innerHTML = '<p class="drawer-empty">Todavía no hay plantillas registradas.</p>';
+    return;
+  }
+  grid.innerHTML = importHistory.map((batch) => {
+    const active = batch.is_active ? "Activa" : "Histórica";
+    const source = batch.source === "backfill" ? "Registro inicial" : batch.source || "dashboard";
+    const changes = batch.cambios || {};
+    return `
+      <article class="history-card ${batch.is_active ? "active" : ""}">
+        <div class="history-card-head">
+          <div>
+            <span class="history-badge">${escapeHtml(active)}</span>
+            <h3>Corte ${escapeHtml(batch.fecha_corte || "-")}</h3>
+            <p>${escapeHtml(batch.filename || source)}</p>
+          </div>
+          <time>${escapeHtml(formatDateTime(batch.imported_at || batch.created_at))}</time>
+        </div>
+        <div class="history-metrics">
+          <div><span>Clientes</span><strong>${number.format(amount(batch.clientes))}</strong></div>
+          <div><span>Facturas</span><strong>${number.format(amount(batch.facturas))}</strong></div>
+          <div><span>Saldo</span><strong>${moneyM(batch.saldo_total)}</strong></div>
+          <div><span>Vencido</span><strong>${moneyM(batch.total_vencido)}</strong></div>
+        </div>
+        <div class="history-meta-row">
+          <span>${escapeHtml(batch.mode || "snapshot_replace")}</span>
+          <span>${escapeHtml(batch.status || "completed")}</span>
+          <span>${escapeHtml(batch.id || "").slice(0, 8)}</span>
+        </div>
+        ${changes.backfill ? '<p class="history-note">Registro inicial creado al habilitar historial.</p>' : ""}
+      </article>
+    `;
+  }).join("");
 }
 
 function renderConditionMix() {
@@ -896,6 +952,7 @@ function showPage(page) {
     cartera: "Cartera Detallada",
     clientes: "Clientes",
     carga: "Carga de Datos",
+    historial: "Historial de Plantillas",
   };
   setText("pageTitle", labels[page] || "Dashboard de Cobranzas");
   document.querySelectorAll("[data-page]").forEach((section) => {
@@ -904,6 +961,7 @@ function showPage(page) {
   document.querySelectorAll("[data-page-link]").forEach((link) => {
     link.classList.toggle("active", link.dataset.pageLink === page);
   });
+  if (page === "historial" && !importHistory.length) loadImportHistory();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1291,6 +1349,7 @@ document.querySelectorAll(".segment").forEach((button) => {
 });
 $("importForm").addEventListener("submit", previewImport);
 $("confirmImportBtn").addEventListener("click", confirmImport);
+$("refreshHistoryBtn").addEventListener("click", loadImportHistory);
 $("closeDrawer").addEventListener("click", closeClientDrawer);
 $("drawerBackdrop").addEventListener("click", closeClientDrawer);
 $("loginForm").addEventListener("submit", handleLogin);

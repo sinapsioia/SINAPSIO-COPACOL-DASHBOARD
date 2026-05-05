@@ -977,6 +977,102 @@ input[type="file"] {
   color: var(--ink-2);
   font-size: 12px;
 }
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.history-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.history-card.active {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: linear-gradient(145deg, var(--surface), var(--success-soft));
+}
+.history-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+.history-card h3 {
+  margin: 6px 0 3px;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 500;
+}
+.history-card p,
+.history-card time {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.history-card time {
+  flex: 0 0 auto;
+  text-align: right;
+}
+.history-badge {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--brand-50);
+  color: var(--brand-600);
+  font-size: 11px;
+  font-weight: 700;
+}
+.history-card.active .history-badge {
+  background: var(--success);
+  color: white;
+}
+.history-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+.history-metrics div {
+  min-width: 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.72);
+  border: 1px solid var(--border);
+}
+.history-metrics span,
+.history-meta-row span {
+  display: block;
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.history-metrics strong {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  color: var(--ink-1);
+}
+.history-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.history-meta-row span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.history-note {
+  margin-top: 12px;
+}
 .import-mini-table td:first-child {
   max-width: 230px;
   padding-right: 12px;
@@ -1419,4 +1515,5 @@ input[type="file"] {
   .modal-kpis { grid-template-columns: 1fr 1fr; }
   .section-head, .table-head { align-items: flex-start; flex-direction: column; }
   .import-change-control, .change-grid { grid-template-columns: 1fr; }
+  .history-grid, .history-metrics { grid-template-columns: 1fr; }
 }

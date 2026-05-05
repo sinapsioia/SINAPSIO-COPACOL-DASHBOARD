@@ -60,6 +60,12 @@
             </svg>
             <span>Carga</span>
           </a>
+          <a class="nav-item" href="#historial" data-page-link="historial">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 8v4l3 2m6-2a9 9 0 11-3.24-6.91M21 3v5h-5"/>
+            </svg>
+            <span>Historial</span>
+          </a>
         </nav>
 
         <div class="sidebar-foot">
@@ -440,6 +446,20 @@
             <p id="importConfirmMsg">Validación exitosa. ¿Confirmar importación a Supabase?</p>
             <small id="importConfirmDetail"></small>
             <button id="confirmImportBtn" class="confirm-btn">Confirmar importación</button>
+          </div>
+        </section>
+
+        <section id="historial" class="panel page" data-page="historial">
+          <div class="section-head table-head">
+            <div>
+              <p class="eyebrow">Auditoría de plantillas</p>
+              <h2>Historial de cargas</h2>
+              <span id="historyCount" class="muted">Cargando historial…</span>
+            </div>
+            <button id="refreshHistoryBtn" type="button">Actualizar historial</button>
+          </div>
+          <div id="historyGrid" class="history-grid">
+            <p class="drawer-empty">Cargando historial…</p>
           </div>
         </section>
       </main>

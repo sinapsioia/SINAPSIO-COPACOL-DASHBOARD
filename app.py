@@ -218,14 +218,26 @@ def aging_bucket(days: float) -> str:
 
 
 def build_dashboard_payload() -> dict:
+    import_batches = []
+    try:
+        import_batches = fetch_all(
+            "copacol_import_batches",
+            "id,source,filename,fecha_corte,imported_at,status,mode,clientes,facturas,saldo_total,total_vencido,total_vigente,aging,cambios,metadata,created_at",
+            "imported_at.desc",
+            page_size=100,
+        )
+    except Exception:
+        import_batches = []
+    latest_batch = import_batches[0] if import_batches else {}
+
     clients = fetch_all(
         "copacol_clients",
-        "nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,created_at,updated_at",
+        "nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
     )
     invoices = fetch_all(
         "copacol_facturas",
-        "nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,created_at,updated_at",
+        "nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
         "fecha_vencimiento.asc",
     )
     promises = fetch_all(
@@ -239,10 +251,18 @@ def build_dashboard_payload() -> dict:
         "created_at.desc",
     )
 
-    latest_cut = max([c.get("fecha_corte") or "" for c in clients] or [""])
+    latest_cut = str(latest_batch.get("fecha_corte") or max([c.get("fecha_corte") or "" for c in clients] or [""]))
+    active_batch_id = latest_batch.get("id")
     latest_clients = [c for c in clients if c.get("fecha_corte") == latest_cut] if latest_cut else []
-    using_active_cut = bool(latest_clients) and len(latest_clients) >= max(50, int(len(clients) * 0.5))
-    if using_active_cut:
+    batch_clients = [c for c in clients if c.get("import_batch_id") == active_batch_id] if active_batch_id else []
+    batch_invoices = [i for i in invoices if i.get("import_batch_id") == active_batch_id] if active_batch_id else []
+    using_active_batch = bool(active_batch_id and batch_clients and batch_invoices)
+    using_active_cut = False
+    if using_active_batch:
+        clients = batch_clients
+        invoices = batch_invoices
+    elif latest_clients and len(latest_clients) >= max(50, int(len(clients) * 0.5)):
+        using_active_cut = True
         clients = latest_clients
         active_nits = {c.get("nit") for c in clients if c.get("nit")}
         expected_invoice_count = sum(int(money(c.get("num_facturas"))) for c in clients)
@@ -261,7 +281,7 @@ def build_dashboard_payload() -> dict:
         row.get("updated_at") or row.get("created_at") or ""
         for row in [*clients, *invoices]
     ]
-    ultima_actualizacion = max(last_update_candidates or [""])
+    ultima_actualizacion = latest_batch.get("imported_at") or max(last_update_candidates or [""])
 
     client_lookup = {client.get("nit"): client for client in clients}
     client_stats: dict[str, dict] = defaultdict(
@@ -435,7 +455,8 @@ def build_dashboard_payload() -> dict:
             "pagos_pendientes": sum(1 for p in payments if (p.get("status") or "").lower() in {"pendiente", "reported", ""}),
             "fecha_corte": latest_cut,
             "ultima_actualizacion": ultima_actualizacion,
-            "snapshot_activo": using_active_cut,
+            "snapshot_activo": using_active_batch or using_active_cut,
+            "import_batch_id": active_batch_id,
         },
         "aging": aging,
         "condition_mix": [{"condicion": key, "saldo": value} for key, value in sorted(condition_mix.items(), key=lambda item: item[1], reverse=True)],
@@ -491,6 +512,26 @@ def snapshot_control_from_preview(preview: dict) -> dict:
             key: int(incoming.get(key) or 0) - int(current.get(key) or 0)
             for key in ["facturas", "clientes"]
         },
+    }
+
+
+def build_import_history_payload() -> dict:
+    batches = fetch_all(
+        "copacol_import_batches",
+        "id,source,filename,fecha_corte,imported_at,imported_by,status,mode,clientes,facturas,saldo_total,total_vencido,total_vigente,aging,cambios,metadata,created_at",
+        "imported_at.desc",
+        page_size=100,
+    )
+    latest_id = batches[0].get("id") if batches else None
+    return {
+        "active_import_batch_id": latest_id,
+        "batches": [
+            {
+                **batch,
+                "is_active": batch.get("id") == latest_id,
+            }
+            for batch in batches
+        ],
     }
 
 
@@ -1019,6 +1060,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/dashboard":
             try:
                 json_response(self, 200, build_dashboard_payload())
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/imports":
+            try:
+                json_response(self, 200, build_import_history_payload())
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
             return
