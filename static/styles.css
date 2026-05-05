@@ -269,6 +269,12 @@ h2 {
 
 .top-actions,
 .segmented { display: flex; align-items: center; gap: 10px; }
+.last-update {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 button {
   border: 0;
@@ -1335,6 +1341,9 @@ input[type="file"] {
   .nav-item span { display: none; }
   .nav-item { padding: 8px 10px; }
   main { padding: 20px 18px 40px; }
+  .topbar { align-items: flex-start; flex-direction: column; }
+  .top-actions { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
+  .last-update { white-space: normal; }
   h1 { font-size: 24px; }
   .hero, .board-header, .executive-grid, .board-grid,
   .goal-strip, .donut-row, .kpi-grid, .dashboard-grid,

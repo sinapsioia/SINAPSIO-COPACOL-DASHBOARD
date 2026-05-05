@@ -220,12 +220,12 @@ def aging_bucket(days: float) -> str:
 def build_dashboard_payload() -> dict:
     clients = fetch_all(
         "copacol_clients",
-        "nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte",
+        "nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,created_at,updated_at",
         "total_saldo.desc",
     )
     invoices = fetch_all(
         "copacol_facturas",
-        "nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado",
+        "nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,created_at,updated_at",
         "fecha_vencimiento.asc",
     )
     promises = fetch_all(
@@ -238,6 +238,30 @@ def build_dashboard_payload() -> dict:
         "nit,telefono,metodo,monto_reportado,status,verificado_por,fecha_verificacion,created_at",
         "created_at.desc",
     )
+
+    latest_cut = max([c.get("fecha_corte") or "" for c in clients] or [""])
+    latest_clients = [c for c in clients if c.get("fecha_corte") == latest_cut] if latest_cut else []
+    using_active_cut = bool(latest_clients) and len(latest_clients) >= max(50, int(len(clients) * 0.5))
+    if using_active_cut:
+        clients = latest_clients
+        active_nits = {c.get("nit") for c in clients if c.get("nit")}
+        expected_invoice_count = sum(int(money(c.get("num_facturas"))) for c in clients)
+        by_update_date: dict[str, list[dict]] = defaultdict(list)
+        for invoice in invoices:
+            stamp = invoice.get("updated_at") or invoice.get("created_at") or ""
+            by_update_date[stamp[:10]].append(invoice)
+        latest_invoice_date = max(by_update_date.keys() or [""])
+        latest_invoice_rows = by_update_date.get(latest_invoice_date, [])
+        if expected_invoice_count and len(latest_invoice_rows) >= expected_invoice_count * 0.75:
+            invoices = latest_invoice_rows
+        else:
+            invoices = [invoice for invoice in invoices if invoice.get("nit") in active_nits]
+
+    last_update_candidates = [
+        row.get("updated_at") or row.get("created_at") or ""
+        for row in [*clients, *invoices]
+    ]
+    ultima_actualizacion = max(last_update_candidates or [""])
 
     client_lookup = {client.get("nit"): client for client in clients}
     client_stats: dict[str, dict] = defaultdict(
@@ -409,7 +433,9 @@ def build_dashboard_payload() -> dict:
             "semaforo_90": status_over90,
             "promesas_pendientes": sum(1 for p in promises if (p.get("status") or "").lower() in {"pendiente", "open", ""}),
             "pagos_pendientes": sum(1 for p in payments if (p.get("status") or "").lower() in {"pendiente", "reported", ""}),
-            "fecha_corte": max([c.get("fecha_corte") or "" for c in clients] or [""]),
+            "fecha_corte": latest_cut,
+            "ultima_actualizacion": ultima_actualizacion,
+            "snapshot_activo": using_active_cut,
         },
         "aging": aging,
         "condition_mix": [{"condicion": key, "saldo": value} for key, value in sorted(condition_mix.items(), key=lambda item: item[1], reverse=True)],

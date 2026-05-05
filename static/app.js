@@ -6,6 +6,10 @@ const money = new Intl.NumberFormat("es-CO", {
 
 const number = new Intl.NumberFormat("es-CO");
 const pct = new Intl.NumberFormat("es-CO", { style: "percent", maximumFractionDigits: 1 });
+const dateTime = new Intl.DateTimeFormat("es-CO", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 let dashboard = null;
 let tableMode = "all";
@@ -62,6 +66,13 @@ function amount(value) {
 
 function moneyM(value) {
   return `$${(amount(value) / 1000000).toLocaleString("es-CO", { maximumFractionDigits: 2 })}M`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return dateTime.format(date);
 }
 
 function conditionValue(key) {
@@ -261,6 +272,7 @@ function renderDashboard() {
   const contado = conditionValue("contado");
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
+  setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", money.format(summary.total_saldo));
   setText("kpiOverdue", money.format(summary.total_vencido));
