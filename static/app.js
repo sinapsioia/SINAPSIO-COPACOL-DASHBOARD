@@ -10,6 +10,10 @@ const dateTime = new Intl.DateTimeFormat("es-CO", {
   dateStyle: "medium",
   timeStyle: "short",
 });
+const clockTime = new Intl.DateTimeFormat("es-CO", {
+  dateStyle: "medium",
+  timeStyle: "medium",
+});
 
 let dashboard = null;
 let tableMode = "all";
@@ -59,6 +63,10 @@ function escapeHtml(value) {
 
 function status(text) {
   setText("syncState", text);
+}
+
+function updateClock() {
+  setText("currentClock", `Hora local: ${clockTime.format(new Date())}`);
 }
 
 function amount(value) {
@@ -255,7 +263,7 @@ function buildView() {
 
 async function loadDashboard() {
   status("Actualizando...");
-  const response = await fetch("/api/dashboard");
+  const response = await fetch("/api/dashboard", { cache: "no-store" });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error || "No se pudo cargar Supabase");
@@ -263,14 +271,15 @@ async function loadDashboard() {
   dashboard = await response.json();
   hydrateFilters();
   renderDashboard();
-  status("Datos actualizados");
+  status(`Datos actualizados ${new Date().toLocaleTimeString("es-CO")}`);
+  if (currentPage === "historial") loadImportHistory();
 }
 
 async function loadImportHistory() {
   const grid = $("historyGrid");
   if (grid) grid.innerHTML = '<p class="drawer-empty">Cargando historial…</p>';
   try {
-    const response = await fetch("/api/imports");
+    const response = await fetch("/api/imports", { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "No se pudo cargar historial");
     importHistory = payload.batches || [];
@@ -1383,6 +1392,8 @@ document.querySelectorAll("[data-page-link]").forEach((link) => {
     showPage(link.dataset.pageLink);
   });
 });
+updateClock();
+setInterval(updateClock, 1000);
 showPage(location.hash ? location.hash.replace("#", "") : "tablero");
 $("closeAdvisorModal").addEventListener("click", () => $("advisorModal").close());
 $("copyAdvisorReport").addEventListener("click", async () => {

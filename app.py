@@ -217,6 +217,19 @@ def aging_bucket(days: float) -> str:
     return "181_plus"
 
 
+def row_stamp(row: dict) -> str:
+    return str(row.get("updated_at") or row.get("created_at") or "")
+
+
+def merge_by_key(base_rows: list[dict], overlay_rows: list[dict], key_fn) -> list[dict]:
+    merged = {key_fn(row): row for row in base_rows if key_fn(row)}
+    for row in overlay_rows:
+        key = key_fn(row)
+        if key:
+            merged[key] = row
+    return list(merged.values())
+
+
 def build_dashboard_payload() -> dict:
     import_batches = []
     try:
@@ -232,12 +245,12 @@ def build_dashboard_payload() -> dict:
 
     clients = fetch_all(
         "copacol_clients",
-        "nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
+        "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
     )
     invoices = fetch_all(
         "copacol_facturas",
-        "nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
+        "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
         "fecha_vencimiento.asc",
     )
     promises = fetch_all(
@@ -253,17 +266,33 @@ def build_dashboard_payload() -> dict:
 
     latest_cut = str(latest_batch.get("fecha_corte") or max([c.get("fecha_corte") or "" for c in clients] or [""]))
     active_batch_id = latest_batch.get("id")
+    latest_imported_at = str(latest_batch.get("imported_at") or "")
     latest_clients = [c for c in clients if c.get("fecha_corte") == latest_cut] if latest_cut else []
     batch_clients = [c for c in clients if c.get("import_batch_id") == active_batch_id] if active_batch_id else []
     batch_invoices = [i for i in invoices if i.get("import_batch_id") == active_batch_id] if active_batch_id else []
+    manual_clients = [
+        c for c in clients
+        if not c.get("import_batch_id")
+        and ((row_stamp(c) and row_stamp(c) > latest_imported_at) or str(c.get("fecha_corte") or "") > latest_cut)
+    ]
+    manual_invoices = [
+        i for i in invoices
+        if not i.get("import_batch_id")
+        and ((row_stamp(i) and row_stamp(i) > latest_imported_at) or str(i.get("fecha_corte") or "") > latest_cut)
+    ]
     using_active_batch = bool(active_batch_id and batch_clients and batch_invoices)
     using_active_cut = False
     if using_active_batch:
-        clients = batch_clients
-        invoices = batch_invoices
+        clients = merge_by_key(batch_clients, manual_clients, lambda row: row.get("nit"))
+        invoices = merge_by_key(
+            batch_invoices,
+            manual_invoices,
+            lambda row: row.get("id") or f"{row.get('nit')}::{row.get('numero_factura')}",
+        )
+        latest_cut = max([c.get("fecha_corte") or latest_cut for c in clients] or [latest_cut])
     elif latest_clients and len(latest_clients) >= max(50, int(len(clients) * 0.5)):
         using_active_cut = True
-        clients = latest_clients
+        clients = merge_by_key(latest_clients, manual_clients, lambda row: row.get("nit"))
         active_nits = {c.get("nit") for c in clients if c.get("nit")}
         expected_invoice_count = sum(int(money(c.get("num_facturas"))) for c in clients)
         by_update_date: dict[str, list[dict]] = defaultdict(list)
@@ -273,15 +302,23 @@ def build_dashboard_payload() -> dict:
         latest_invoice_date = max(by_update_date.keys() or [""])
         latest_invoice_rows = by_update_date.get(latest_invoice_date, [])
         if expected_invoice_count and len(latest_invoice_rows) >= expected_invoice_count * 0.75:
-            invoices = latest_invoice_rows
+            invoices = merge_by_key(
+                latest_invoice_rows,
+                manual_invoices,
+                lambda row: row.get("id") or f"{row.get('nit')}::{row.get('numero_factura')}",
+            )
         else:
-            invoices = [invoice for invoice in invoices if invoice.get("nit") in active_nits]
+            invoices = merge_by_key(
+                [invoice for invoice in invoices if invoice.get("nit") in active_nits],
+                manual_invoices,
+                lambda row: row.get("id") or f"{row.get('nit')}::{row.get('numero_factura')}",
+            )
 
     last_update_candidates = [
         row.get("updated_at") or row.get("created_at") or ""
         for row in [*clients, *invoices]
     ]
-    ultima_actualizacion = latest_batch.get("imported_at") or max(last_update_candidates or [""])
+    ultima_actualizacion = max([latest_batch.get("imported_at") or "", *last_update_candidates])
 
     client_lookup = {client.get("nit"): client for client in clients}
     client_stats: dict[str, dict] = defaultdict(
@@ -457,6 +494,7 @@ def build_dashboard_payload() -> dict:
             "ultima_actualizacion": ultima_actualizacion,
             "snapshot_activo": using_active_batch or using_active_cut,
             "import_batch_id": active_batch_id,
+            "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
         },
         "aging": aging,
         "condition_mix": [{"condicion": key, "saldo": value} for key, value in sorted(condition_mix.items(), key=lambda item: item[1], reverse=True)],
