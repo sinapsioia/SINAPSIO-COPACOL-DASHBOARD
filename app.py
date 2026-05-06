@@ -338,6 +338,8 @@ def build_dashboard_payload() -> dict:
     condition_mix: dict[str, float] = defaultdict(float)
     seller_aging: dict[str, dict] = {}
     enriched_invoices = []
+    manual_client_by_nit = {client.get("nit"): client for client in manual_clients if client.get("nit")}
+    client_total_overrides = manual_client_by_nit
 
     for client in clients:
         seller_key = client.get("asesor_codigo") or "sin_codigo"
@@ -361,6 +363,20 @@ def build_dashboard_payload() -> dict:
         amount = money(invoice.get("monto"))
         days = money(invoice.get("dias_mora"))
         nit = invoice.get("nit")
+        if nit in client_total_overrides:
+            enriched_invoices.append(
+                {
+                    **invoice,
+                    "cliente": client.get("razon_social") or "Sin cliente",
+                    "asesor_codigo": client.get("asesor_codigo") or "sin_codigo",
+                    "asesor_nombre": client.get("asesor_nombre") or "Sin asesor",
+                    "ciudad": client.get("ciudad") or "Sin ciudad",
+                    "telefono": client.get("telefono") or client.get("telefono_2") or "",
+                    "aging_bucket": aging_bucket(days),
+                    "manual_client_override": True,
+                }
+            )
+            continue
         bucket = aging_bucket(days)
         seller_code = client.get("asesor_codigo") or "sin_codigo"
         seller_name = client.get("asesor_nombre") or "Sin asesor"
@@ -410,6 +426,50 @@ def build_dashboard_payload() -> dict:
                 "aging_bucket": bucket,
             }
         )
+
+    for nit, client in client_total_overrides.items():
+        saldo = money(client.get("total_saldo"))
+        vencido = money(client.get("total_vencido"))
+        vigente = money(client.get("total_vigente"))
+        if not vigente and saldo >= vencido:
+            vigente = saldo - vencido
+        days = money(client.get("dias_mora_max"))
+        overdue_bucket = aging_bucket(days if vencido > 0 else 0)
+        seller_code = client.get("asesor_codigo") or "sin_codigo"
+        seller_name = client.get("asesor_nombre") or "Sin asesor"
+        seller_matrix = seller_aging.setdefault(
+            seller_code,
+            {
+                "codigo": seller_code,
+                "nombre": seller_name,
+                "total": 0.0,
+                "vencido": 0.0,
+                "vigente": 0.0,
+                "1_30": 0.0,
+                "31_60": 0.0,
+                "61_90": 0.0,
+                "91_120": 0.0,
+                "121_180": 0.0,
+                "181_plus": 0.0,
+                "pct_vencido": 0.0,
+            },
+        )
+        seller_matrix["total"] += saldo
+        seller_matrix["vigente"] += vigente
+        seller_matrix[overdue_bucket] += vencido
+        seller_matrix["vencido"] += vencido
+        condition_mix[client.get("condicion_pago") or "sin_condicion"] += saldo
+        client_stats[nit] = {
+            "saldo": saldo,
+            "vencido": vencido,
+            "vigente": vigente,
+            "facturas": int(money(client.get("num_facturas"))),
+            "vencidas": int(money(client.get("num_vencidas"))),
+            "dias_mora_max": days,
+        }
+        aging["vigente"] += vigente
+        if vencido > 0:
+            aging[overdue_bucket] += vencido
 
     total_vigente = aging["vigente"]
     total_vencido = aging["1_30"] + aging["31_60"] + aging["61_90"] + aging["91_120"] + aging["121_180"] + aging["181_plus"]
