@@ -38,3 +38,9 @@ create index if not exists copacol_clients_import_batch_id_idx
 
 create index if not exists copacol_facturas_import_batch_id_idx
   on public.copacol_facturas (import_batch_id);
+
+-- Evita dos ingestas simultaneas. n8n crea el lote como `running`,
+-- reemplaza la cartera activa y solo al final lo marca como `completed`.
+create unique index if not exists copacol_import_batches_single_running_idx
+  on public.copacol_import_batches (status)
+  where status = 'running';

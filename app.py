@@ -239,6 +239,7 @@ def build_dashboard_payload() -> dict:
             "imported_at.desc",
             page_size=100,
         )
+        import_batches = [batch for batch in import_batches if (batch.get("status") or "").lower() == "completed"]
     except Exception:
         import_batches = []
     latest_batch = import_batches[0] if import_batches else {}
@@ -620,7 +621,8 @@ def build_import_history_payload() -> dict:
         "imported_at.desc",
         page_size=100,
     )
-    latest_id = batches[0].get("id") if batches else None
+    completed = [batch for batch in batches if (batch.get("status") or "").lower() == "completed"]
+    latest_id = completed[0].get("id") if completed else None
     return {
         "active_import_batch_id": latest_id,
         "batches": [
