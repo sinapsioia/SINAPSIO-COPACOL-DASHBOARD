@@ -84,7 +84,7 @@ def extract_multipart_file(body: bytes, content_type: str) -> tuple[bytes | None
 
 def send_file_to_n8n(file_bytes: bytes, filename: str) -> dict:
     if not N8N_IMPORT_WEBHOOK_URL:
-        raise RuntimeError("N8N_IMPORT_WEBHOOK_URL no está configurado.")
+        raise RuntimeError("La conexión de actualización de base de datos no está configurada.")
 
     boundary = f"----copacol-{uuid.uuid4().hex}"
     content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -112,19 +112,19 @@ def send_file_to_n8n(file_bytes: bytes, filename: str) -> dict:
         with urllib.request.urlopen(req, timeout=180) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             if not raw:
-                return {"status": "accepted", "message": "n8n recibió el archivo sin cuerpo de respuesta."}
+                return {"status": "accepted", "message": "Archivo recibido para actualizar la base de datos."}
             try:
                 return json.loads(raw)
             except json.JSONDecodeError:
                 return {"status": "accepted", "message": raw}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"n8n respondió {exc.code}: {detail}")
+        raise RuntimeError(f"La actualización de base de datos respondió {exc.code}: {detail}")
 
 
 def post_json_to_n8n(url: str, payload: dict, timeout: int = 60) -> dict:
     if not url:
-        raise RuntimeError("Webhook de n8n no configurado.")
+        raise RuntimeError("La conexión de automatización no está configurada.")
     body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
@@ -137,14 +137,14 @@ def post_json_to_n8n(url: str, payload: dict, timeout: int = 60) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             if not raw:
-                return {"status": "received", "message": "n8n recibió la solicitud sin cuerpo de respuesta."}
+                return {"status": "received", "message": "Solicitud recibida correctamente."}
             try:
                 return json.loads(raw)
             except json.JSONDecodeError:
                 return {"status": "received", "message": raw}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"n8n respondió {exc.code}: {detail}")
+        raise RuntimeError(f"La automatización respondió {exc.code}: {detail}")
 
 
 def response_output_text(payload: dict) -> str:
@@ -912,7 +912,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
     if use_n8n:
         file_bytes = entry.get("file_bytes")
         if not file_bytes:
-            raise ValueError("El archivo original ya no está disponible para enviarlo a n8n. Vuelve a validar el XLSX.")
+            raise ValueError("El archivo original ya no está disponible para actualizar la base de datos. Vuelve a validar el XLSX.")
         result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx")
         del IMPORT_CACHE[token]
         if isinstance(result, list):
@@ -920,7 +920,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
         if not isinstance(result, dict):
             result = {"status": "accepted", "message": str(result)}
         result.setdefault("status", "imported")
-        result.setdefault("message", "Archivo enviado a n8n. Supabase fue actualizado por el flujo de ingesta.")
+        result.setdefault("message", "Archivo recibido. La base de datos fue actualizada correctamente.")
         result["via"] = "n8n"
         return result
 

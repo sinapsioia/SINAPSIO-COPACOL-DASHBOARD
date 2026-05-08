@@ -796,7 +796,7 @@ function clientCards(rows) {
           </div>
           <div class="client-actions" aria-label="Acciones rápidas">
             ${phone ? `<a href="tel:+${phone}" title="Llamar">Tel</a>` : `<span title="Sin teléfono">Tel</span>`}
-            ${phone ? `<button class="whatsapp-trigger" data-nit="${client.nit}" title="Preparar WhatsApp en n8n">WA</button>` : `<span title="Sin WhatsApp">WA</span>`}
+            ${phone ? `<button class="whatsapp-trigger" data-nit="${client.nit}" title="Preparar contacto por WhatsApp">WA</button>` : `<span title="Sin WhatsApp">WA</span>`}
             <button class="drawer-trigger" data-nit="${client.nit}" title="Ver ficha completa">Ficha</button>
           </div>
         </article>
@@ -843,7 +843,7 @@ async function previewImport(event) {
     if (result.token) {
       importToken = result.token;
       setText("importConfirmMsg", `Importación lista para confirmar`);
-      const route = supabaseConfig?.n8n_import_enabled ? "Al confirmar se enviará al flujo n8n de ingesta y luego se recargará el tablero." : "Al confirmar se actualizará Supabase desde el backend y luego se recargará el tablero.";
+      const route = "Al confirmar se actualizará la base de datos y luego se recargará el tablero.";
       setText("importConfirmDetail", `${number.format(result.facturas)} facturas · ${number.format(result.clientes)} clientes · ${moneyM(result.saldo_total)} · ${route}`);
       $("importConfirm").classList.add("visible");
     }
@@ -1338,7 +1338,7 @@ async function saveContact() {
 async function confirmImport() {
   if (!importToken) return;
   $("confirmImportBtn").disabled = true;
-  $("confirmImportBtn").textContent = supabaseConfig?.n8n_import_enabled ? "Enviando a n8n…" : "Importando…";
+  $("confirmImportBtn").textContent = "Actualizando base de datos…";
   try {
     const res = await fetch("/api/import/confirm", {
       method: "POST",
