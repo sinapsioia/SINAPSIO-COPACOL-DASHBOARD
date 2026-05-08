@@ -326,7 +326,7 @@ function renderDashboard() {
   const overdueRatio = summary.total_saldo ? summary.total_vencido / summary.total_saldo : 0;
   const carteraComercial = conditionPrefixValue(["1305"], "positive");
   const otrosDeudores = conditionPrefixValue(["1380", "1365", "1330"], "positive");
-  const saldosFavor = Math.abs(conditionPrefixValue(["2805"], "negative"));
+  const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionPrefixValue(["2805"], "negative"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
@@ -347,7 +347,7 @@ function renderDashboard() {
   setText("kpiCredito45", moneyM(otrosDeudores));
   setText("kpiCredito45Pct", pct.format(otrosDeudores / summary.total_saldo || 0));
   setText("kpiContado", moneyM(saldosFavor));
-  setText("kpiContadoPct", `Resta ${pct.format(saldosFavor / summary.total_saldo || 0)}`);
+  setText("kpiContadoPct", `Saldo a favor ${pct.format(saldosFavor / summary.total_saldo || 0)}`);
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
   setText("riskPill", overdueRatio > 0.55 ? "Riesgo alto: priorizar vencidos" : overdueRatio > 0.35 ? "Riesgo medio: seguimiento diario" : "Cartera controlada");
@@ -1033,6 +1033,8 @@ function buildAssistantContext() {
   return {
     fecha_corte: s.fecha_corte,
     total_saldo: s.total_saldo,
+    saldo_neto: s.saldo_neto,
+    saldos_a_favor: s.saldos_a_favor,
     total_vencido: s.total_vencido,
     total_vigente: s.total_vigente,
     pct_vencido: s.total_saldo ? (s.total_vencido / s.total_saldo) * 100 : 0,

@@ -338,6 +338,8 @@ def build_dashboard_payload() -> dict:
     aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "91_120": 0.0, "121_180": 0.0, "181_plus": 0.0}
     condition_mix: dict[str, float] = defaultdict(float)
     seller_aging: dict[str, dict] = {}
+    saldo_neto = 0.0
+    saldos_a_favor = 0.0
     enriched_invoices = []
     manual_client_by_nit = {client.get("nit"): client for client in manual_clients if client.get("nit")}
     client_total_overrides = manual_client_by_nit
@@ -362,6 +364,9 @@ def build_dashboard_payload() -> dict:
     for invoice in invoices:
         client = client_lookup.get(invoice.get("nit"), {})
         amount = money(invoice.get("monto"))
+        positive_amount = amount if amount > 0 else 0.0
+        if amount < 0:
+            saldos_a_favor += abs(amount)
         days = money(invoice.get("dias_mora"))
         nit = invoice.get("nit")
         if nit in client_total_overrides:
@@ -398,23 +403,24 @@ def build_dashboard_payload() -> dict:
                 "pct_vencido": 0.0,
             },
         )
-        seller_matrix["total"] += amount
-        seller_matrix[bucket] += amount
+        seller_matrix["total"] += positive_amount
+        seller_matrix[bucket] += positive_amount
         if days > 0:
-            seller_matrix["vencido"] += amount
+            seller_matrix["vencido"] += positive_amount
 
         condition_mix[invoice.get("condicion_pago") or "sin_condicion"] += amount
+        saldo_neto += amount
         if nit:
             client_stats[nit]["saldo"] += amount
             client_stats[nit]["facturas"] += 1
             if days > 0:
-                client_stats[nit]["vencido"] += amount
+                client_stats[nit]["vencido"] += positive_amount
                 client_stats[nit]["vencidas"] += 1
                 client_stats[nit]["dias_mora_max"] = max(client_stats[nit]["dias_mora_max"], days)
             else:
-                client_stats[nit]["vigente"] += amount
+                client_stats[nit]["vigente"] += positive_amount
 
-        aging[bucket] += amount
+        aging[bucket] += positive_amount
 
         enriched_invoices.append(
             {
@@ -460,6 +466,9 @@ def build_dashboard_payload() -> dict:
         seller_matrix[overdue_bucket] += vencido
         seller_matrix["vencido"] += vencido
         condition_mix[client.get("condicion_pago") or "sin_condicion"] += saldo
+        saldo_neto += saldo
+        if saldo < 0:
+            saldos_a_favor += abs(saldo)
         client_stats[nit] = {
             "saldo": saldo,
             "vencido": vencido,
@@ -536,6 +545,9 @@ def build_dashboard_payload() -> dict:
     return {
         "summary": {
             "total_saldo": total_saldo,
+            "saldo_cobrable": total_saldo,
+            "saldo_neto": saldo_neto,
+            "saldos_a_favor": saldos_a_favor,
             "total_vencido": total_vencido,
             "total_vigente": total_vigente,
             "clientes": len(clients),
@@ -856,13 +868,13 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
         pct_top10 = money(ctx.get("concentracion_top10_pct")) * 100
         return f"El Pareto de clientes muestra qué pocos clientes concentran la mayor parte de la cartera vencida. En esta vista, el top 10 concentra cerca del {pct_top10:.1f}% del saldo total; los principales son: {top}. Sirve para priorizar gestión donde cada llamada mueve más dinero."
 
-    if any(term in q for term in ["composición", "composicion", "compuesta", "mix", "condición", "condicion"]):
+    if any(term in q for term in ["composición", "composicion", "compuesta", "mix", "condición", "condicion", "cuenta contable"]):
         aging_txt = ", ".join(f"{key}: {fmt(value)}" for key, value in aging.items() if money(value)) or "sin distribución por edad"
         cond_txt = ", ".join(
-            f"{item.get('condicion', 'sin condición')}: {fmt(item.get('saldo'))}"
+            f"{item.get('condicion', 'sin cuenta')}: {fmt(item.get('saldo'))}"
             for item in condition_mix[:5]
-        ) or "sin composición por condición de pago"
-        return f"La cartera se compone así: vigente {fmt(ctx.get('total_vigente'))} y vencida {fmt(total_vencido)} sobre {fmt(total_saldo)} total. Por edad: {aging_txt}. Por condición de pago: {cond_txt}."
+        ) or "sin composición por cuenta contable"
+        return f"La cartera se compone así: vigente {fmt(ctx.get('total_vigente'))} y vencida {fmt(total_vencido)} sobre {fmt(total_saldo)} total cobrable. Por edad: {aging_txt}. Por cuenta contable de Siigo: {cond_txt}. Para separar Platam, contado, crédito 45 y crédito 60 necesitamos una columna o regla fuente adicional."
 
     if any(term in q for term in ["factura más vieja", "factura mas vieja", "más antigua", "mas antigua", "mayor mora", "factura vieja"]):
         if overdue_invoices:
@@ -1032,6 +1044,8 @@ def parse_xlsx(path: Path) -> dict:
     by_seller: dict[str, float] = defaultdict(float)
     aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
     total_saldo = 0.0
+    saldo_neto = 0.0
+    saldos_a_favor = 0.0
 
     for raw in rows[6:]:
         if len(raw) < 20:
@@ -1066,8 +1080,12 @@ def parse_xlsx(path: Path) -> dict:
             "saldo": saldo,
         }
         records.append(record)
-        total_saldo += saldo
-        by_seller[f"{seller_code} - {seller_name}"] += saldo
+        saldo_neto += saldo
+        saldo_cobrable = saldo if saldo > 0 else 0.0
+        if saldo < 0:
+            saldos_a_favor += abs(saldo)
+        total_saldo += saldo_cobrable
+        by_seller[f"{seller_code} - {seller_name}"] += saldo_cobrable
 
         client = by_client.setdefault(
             nit,
@@ -1087,15 +1105,15 @@ def parse_xlsx(path: Path) -> dict:
             client["dias_mora_max"] = max(client["dias_mora_max"], dias)
 
         if dias <= 0:
-            aging["vigente"] += saldo
+            aging["vigente"] += saldo_cobrable
         elif dias <= 30:
-            aging["1_30"] += saldo
+            aging["1_30"] += saldo_cobrable
         elif dias <= 60:
-            aging["31_60"] += saldo
+            aging["31_60"] += saldo_cobrable
         elif dias <= 90:
-            aging["61_90"] += saldo
+            aging["61_90"] += saldo_cobrable
         else:
-            aging["90_plus"] += saldo
+            aging["90_plus"] += saldo_cobrable
 
     cut_date = None
     for row in rows[:6]:
@@ -1139,6 +1157,8 @@ def parse_xlsx(path: Path) -> dict:
         "clientes": len(by_client),
         "vendedores": len(by_seller),
         "saldo_total": total_saldo,
+        "saldo_neto": saldo_neto,
+        "saldos_a_favor": saldos_a_favor,
         "aging": aging,
         "top_clientes": sorted(by_client.values(), key=lambda c: c["saldo"], reverse=True)[:10],
         "top_vendedores": [
@@ -1278,7 +1298,7 @@ class Handler(BaseHTTPRequestHandler):
                     for k, v in (ctx.get("aging") or {}).items()
                 )
                 condition_txt = "\n".join(
-                    f"- {c.get('condicion','sin condición')}: {fmt(money(c.get('saldo')))}"
+                    f"- {c.get('condicion','sin cuenta')}: {fmt(money(c.get('saldo')))}"
                     for c in (ctx.get("condition_mix") or [])[:8]
                 )
                 pareto_txt = "\n".join(
@@ -1299,6 +1319,8 @@ RESTRICCIÓN IMPORTANTE: Si la pregunta no está relacionada con cartera, cobran
 
 DATOS ACTUALES (corte: {ctx.get('fecha_corte') or 'sin fecha'}):
 - Saldo total: {fmt(money(ctx.get('total_saldo')))}
+- Saldo neto Siigo: {fmt(money(ctx.get('saldo_neto')))}
+- Saldos a favor / anticipos: {fmt(money(ctx.get('saldos_a_favor')))}
 - Cartera vencida: {fmt(money(ctx.get('total_vencido')))} ({pct_vencido:.1f}% del total) · Semáforo: {semaforo}
 - Cartera vigente: {fmt(money(ctx.get('total_vigente')))}
 - Clientes: {ctx.get('clientes',0)} activos, {ctx.get('clientes_vencidos',0)} con mora
@@ -1308,7 +1330,7 @@ DATOS ACTUALES (corte: {ctx.get('fecha_corte') or 'sin fecha'}):
 DISTRIBUCIÓN POR EDAD:
 {aging_txt}
 
-COMPOSICIÓN POR CONDICIÓN DE PAGO:
+COMPOSICIÓN POR CUENTA CONTABLE DE SIIGO:
 {condition_txt}
 
 TOP CLIENTES CON MAYOR MORA:
@@ -1326,6 +1348,7 @@ ASESORES:
 Reglas de respuesta:
 - Español, tono operativo y directo.
 - Montos en millones (ej: $2.4M).
+- No afirmes que una cuenta contable equivale a Platam, contado, crédito 45 o crédito 60 si el dato fuente no lo trae explícito.
 - Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
 - Máximo 4 oraciones salvo que pidan análisis completo."""
 
