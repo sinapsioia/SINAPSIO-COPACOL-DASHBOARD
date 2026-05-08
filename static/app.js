@@ -40,6 +40,15 @@ const conditionLabels = {
   credito_60d: ["Crédito 60d", "#60a5fa"],
   credito_otro: ["Crédito otro", "#8b5cf6"],
   contado: ["Contado", "#10b981"],
+  "1305050100": ["1305050100 · Clientes nacionales", "#64748b"],
+  "1305052200": ["1305052200 · Clientes especiales", "#3b82f6"],
+  "1380200200": ["1380200200 · Deudores varios", "#f97316"],
+  "1380200100": ["1380200100 · Deudores varios", "#f59e0b"],
+  "1365950100": ["1365950100 · Cuentas por cobrar", "#8b5cf6"],
+  "1330150100": ["1330150100 · Anticipos / terceros", "#10b981"],
+  "1330050100": ["1330050100 · Anticipos", "#14b8a6"],
+  "1380950100": ["1380950100 · Diversos", "#0ea5e9"],
+  "2805050100": ["2805050100 · Saldos a favor", "#dc2626"],
   sin_condicion: ["Sin condición", "#64748b"],
 };
 
@@ -98,6 +107,17 @@ function signedMoneyM(value) {
 
 function conditionValue(key) {
   return amount(((dashboard.view || dashboard).condition_mix.find((item) => item.condicion === key) || {}).saldo);
+}
+
+function conditionPrefixValue(prefixes, mode = "all") {
+  return (dashboard.view || dashboard).condition_mix
+    .filter((item) => prefixes.some((prefix) => String(item.condicion || "").startsWith(prefix)))
+    .reduce((sum, item) => {
+      const value = amount(item.saldo);
+      if (mode === "positive" && value <= 0) return sum;
+      if (mode === "negative" && value >= 0) return sum;
+      return sum + value;
+    }, 0);
 }
 
 function advisorInvoices(code) {
@@ -304,9 +324,9 @@ function renderDashboard() {
   const view = dashboard.view;
   const summary = view.summary;
   const overdueRatio = summary.total_saldo ? summary.total_vencido / summary.total_saldo : 0;
-  const credito60 = conditionValue("credito_60d");
-  const credito45 = conditionValue("credito_45d");
-  const contado = conditionValue("contado");
+  const carteraComercial = conditionPrefixValue(["1305"], "positive");
+  const otrosDeudores = conditionPrefixValue(["1380", "1365", "1330"], "positive");
+  const saldosFavor = Math.abs(conditionPrefixValue(["2805"], "negative"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
@@ -322,12 +342,12 @@ function renderDashboard() {
   setText("kpiConcentrationMoney", money.format(summary.concentracion_top10 || 0));
   setText("overduePctCard", pct.format(overdueRatio));
   setText("overduePctHero", pct.format(overdueRatio));
-  setText("kpiCredito60", moneyM(credito60));
-  setText("kpiCredito60Pct", pct.format(credito60 / summary.total_saldo || 0));
-  setText("kpiCredito45", moneyM(credito45));
-  setText("kpiCredito45Pct", pct.format(credito45 / summary.total_saldo || 0));
-  setText("kpiContado", moneyM(contado));
-  setText("kpiContadoPct", pct.format(contado / summary.total_saldo || 0));
+  setText("kpiCredito60", moneyM(carteraComercial));
+  setText("kpiCredito60Pct", pct.format(carteraComercial / summary.total_saldo || 0));
+  setText("kpiCredito45", moneyM(otrosDeudores));
+  setText("kpiCredito45Pct", pct.format(otrosDeudores / summary.total_saldo || 0));
+  setText("kpiContado", moneyM(saldosFavor));
+  setText("kpiContadoPct", `Resta ${pct.format(saldosFavor / summary.total_saldo || 0)}`);
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
   setText("riskPill", overdueRatio > 0.55 ? "Riesgo alto: priorizar vencidos" : overdueRatio > 0.35 ? "Riesgo medio: seguimiento diario" : "Cartera controlada");
@@ -388,23 +408,26 @@ function renderImportHistory() {
 
 function renderConditionMix() {
   const view = dashboard.view || dashboard;
-  const total = view.summary.total_saldo || 1;
+  const positiveItems = view.condition_mix.filter((item) => amount(item.saldo) > 0);
+  const total = positiveItems.reduce((sum, item) => sum + amount(item.saldo), 0) || 1;
   let cursor = 0;
-  const stops = view.condition_mix.map((item) => {
+  const stops = positiveItems.map((item) => {
     const [label, color] = conditionLabels[item.condicion] || [item.condicion, "#64748b"];
     const start = cursor;
     cursor += (item.saldo / total) * 100;
     return `${color} ${start}% ${cursor}%`;
   });
-  $("mixDonut").style.background = `conic-gradient(${stops.join(", ")})`;
+  $("mixDonut").style.background = stops.length ? `conic-gradient(${stops.join(", ")})` : "var(--surface-3)";
   $("mixLegend").innerHTML = view.condition_mix
     .map((item) => {
       const [label, color] = conditionLabels[item.condicion] || [item.condicion, "#64748b"];
+      const value = amount(item.saldo);
+      const share = value > 0 ? value / total : 0;
       return `
         <div class="legend-row">
           <i style="background:${color}"></i>
           <span>${label}</span>
-          <strong>${moneyM(item.saldo)} <em>${pct.format(item.saldo / total)}</em></strong>
+          <strong>${moneyM(value)} <em>${value < 0 ? "Saldo a favor" : pct.format(share)}</em></strong>
         </div>
       `;
     })
