@@ -152,6 +152,15 @@ def read_xlsx(path: Path) -> list[dict]:
     return parsed
 
 
+def dedupe_by_nit(rows: list[dict]) -> list[dict]:
+    deduped: dict[str, dict] = {}
+    for row in rows:
+        nit = row.get("nit")
+        if nit:
+            deduped[nit] = row
+    return list(deduped.values())
+
+
 def chunks(rows: list[dict], size: int = 500):
     for index in range(0, len(rows), size):
         yield rows[index:index + size]
@@ -187,15 +196,18 @@ def main() -> int:
     args = [arg for arg in sys.argv[1:] if arg != "--dry-run"]
     path = Path(args[0]) if args else DEFAULT_FILE
     rows = read_xlsx(path)
+    unique_rows = dedupe_by_nit(rows)
     counts = Counter(row["condicion_key"] for row in rows)
+    unique_counts = Counter(row["condicion_key"] for row in unique_rows)
     print(f"Archivo: {path}")
     print(f"Terceros leídos: {len(rows)}")
+    print(f"Terceros únicos por NIT: {len(unique_rows)}")
     for key, count in counts.most_common():
-        print(f"- {key}: {count}")
+        print(f"- {key}: {count} leídos · {unique_counts.get(key, 0)} únicos")
     if dry_run:
         print("Dry run: no se subió información a Supabase.")
     else:
-        upsert_rows(rows)
+        upsert_rows(unique_rows)
         print("Carga completada en Supabase.")
     return 0
 
