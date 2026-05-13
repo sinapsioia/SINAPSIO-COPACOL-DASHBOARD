@@ -201,6 +201,26 @@ def money(value) -> float:
         return 0.0
 
 
+def normalize_nit(value) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+def credit_condition_key(plazo, observacion: str = "") -> str:
+    plazo_txt = str(plazo or "").strip().split(".")[0]
+    obs = str(observacion or "").strip().upper()
+    if "PLATAM" in obs:
+        return "platam_60d" if "60" in obs or plazo_txt == "60" else "platam_30d"
+    if "CONTADO" in obs or plazo_txt in {"0", "1"}:
+        return "contado"
+    if "45" in obs or plazo_txt == "45":
+        return "credito_45d"
+    if "60" in obs or plazo_txt == "60":
+        return "credito_60d"
+    if plazo_txt == "30":
+        return "platam_30d"
+    return "credito_otro" if plazo_txt else "sin_condicion_real"
+
+
 def aging_bucket(days: float) -> str:
     if days <= 0:
         return "vigente"
@@ -264,6 +284,15 @@ def build_dashboard_payload() -> dict:
         "nit,telefono,metodo,monto_reportado,status,verificado_por,fecha_verificacion,created_at",
         "created_at.desc",
     )
+    credit_terms = []
+    try:
+        credit_terms = fetch_all(
+            "copacol_terceros_credito",
+            "nit,nombre,activo,cupo_credito,vendedor_codigo,plazo_pago_real,condicion_credito,condicion_key,observacion,updated_at",
+            "nit.asc",
+        )
+    except Exception:
+        credit_terms = []
 
     latest_cut = str(latest_batch.get("fecha_corte") or max([c.get("fecha_corte") or "" for c in clients] or [""]))
     active_batch_id = latest_batch.get("id")
@@ -322,6 +351,7 @@ def build_dashboard_payload() -> dict:
     ultima_actualizacion = max([latest_batch.get("imported_at") or "", *last_update_candidates])
 
     client_lookup = {client.get("nit"): client for client in clients}
+    credit_lookup = {normalize_nit(term.get("nit")): term for term in credit_terms if normalize_nit(term.get("nit"))}
     client_stats: dict[str, dict] = defaultdict(
         lambda: {
             "saldo": 0.0,
@@ -363,10 +393,16 @@ def build_dashboard_payload() -> dict:
 
     for invoice in invoices:
         client = client_lookup.get(invoice.get("nit"), {})
+        credit_term = credit_lookup.get(normalize_nit(invoice.get("nit"))) or credit_lookup.get(normalize_nit(client.get("nit")))
+        condition_key = (credit_term or {}).get("condicion_key") or credit_condition_key(
+            (credit_term or {}).get("plazo_pago_real"),
+            (credit_term or {}).get("observacion") or invoice.get("condicion_pago"),
+        )
         amount = money(invoice.get("monto"))
         positive_amount = amount if amount > 0 else 0.0
         if amount < 0:
             saldos_a_favor += abs(amount)
+            condition_key = "saldos_a_favor"
         days = money(invoice.get("dias_mora"))
         nit = invoice.get("nit")
         if nit in client_total_overrides:
@@ -379,6 +415,10 @@ def build_dashboard_payload() -> dict:
                     "ciudad": client.get("ciudad") or "Sin ciudad",
                     "telefono": client.get("telefono") or client.get("telefono_2") or "",
                     "aging_bucket": aging_bucket(days),
+                    "condicion_pago_real": condition_key,
+                    "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                    "cupo_credito": (credit_term or {}).get("cupo_credito"),
+                    "observacion_credito": (credit_term or {}).get("observacion"),
                     "manual_client_override": True,
                 }
             )
@@ -408,7 +448,7 @@ def build_dashboard_payload() -> dict:
         if days > 0:
             seller_matrix["vencido"] += positive_amount
 
-        condition_mix[invoice.get("condicion_pago") or "sin_condicion"] += amount
+        condition_mix[condition_key] += amount
         saldo_neto += amount
         if nit:
             client_stats[nit]["saldo"] += amount
@@ -431,10 +471,19 @@ def build_dashboard_payload() -> dict:
                 "ciudad": client.get("ciudad") or "Sin ciudad",
                 "telefono": client.get("telefono") or client.get("telefono_2") or "",
                 "aging_bucket": bucket,
+                "condicion_pago_real": condition_key,
+                "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                "cupo_credito": (credit_term or {}).get("cupo_credito"),
+                "observacion_credito": (credit_term or {}).get("observacion"),
             }
         )
 
     for nit, client in client_total_overrides.items():
+        credit_term = credit_lookup.get(normalize_nit(nit))
+        condition_key = (credit_term or {}).get("condicion_key") or credit_condition_key(
+            (credit_term or {}).get("plazo_pago_real"),
+            (credit_term or {}).get("observacion") or client.get("condicion_pago"),
+        )
         saldo = money(client.get("total_saldo"))
         vencido = money(client.get("total_vencido"))
         vigente = money(client.get("total_vigente"))
@@ -465,7 +514,7 @@ def build_dashboard_payload() -> dict:
         seller_matrix["vigente"] += vigente
         seller_matrix[overdue_bucket] += vencido
         seller_matrix["vencido"] += vencido
-        condition_mix[client.get("condicion_pago") or "sin_condicion"] += saldo
+        condition_mix[condition_key] += saldo
         saldo_neto += saldo
         if saldo < 0:
             saldos_a_favor += abs(saldo)
@@ -492,6 +541,8 @@ def build_dashboard_payload() -> dict:
 
     enriched_clients = []
     for client in clients:
+        credit_term = credit_lookup.get(normalize_nit(client.get("nit")))
+        condition_key = (credit_term or {}).get("condicion_key") or "sin_condicion_real"
         stats = client_stats.get(client.get("nit"), {})
         saldo = money(stats.get("saldo")) or money(client.get("total_saldo"))
         vencido = money(stats.get("vencido"))
@@ -508,6 +559,11 @@ def build_dashboard_payload() -> dict:
                 "total_saldo": saldo,
                 "total_vencido": vencido,
                 "total_vigente": money(stats.get("vigente")),
+                "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                "condicion_pago_real": condition_key,
+                "condicion_credito": (credit_term or {}).get("condicion_credito"),
+                "cupo_credito": (credit_term or {}).get("cupo_credito"),
+                "observacion_credito": (credit_term or {}).get("observacion"),
                 "num_facturas": int(stats.get("facturas") or client.get("num_facturas") or 0),
                 "num_vencidas": int(stats.get("vencidas") or client.get("num_vencidas") or 0),
                 "dias_mora_max": dias_max,
@@ -568,6 +624,7 @@ def build_dashboard_payload() -> dict:
             "snapshot_activo": using_active_batch or using_active_cut,
             "import_batch_id": active_batch_id,
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
+            "terceros_credito": len(credit_terms),
         },
         "aging": aging,
         "condition_mix": [{"condicion": key, "saldo": value} for key, value in sorted(condition_mix.items(), key=lambda item: item[1], reverse=True)],
@@ -698,6 +755,36 @@ def build_client_payload(nit: str) -> dict:
 
     inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
     invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
+    credit_term = {}
+    try:
+        term_params = urllib.parse.urlencode({"nit": f"eq.{normalize_nit(nit)}", "limit": "1"})
+        terms = supabase_get("copacol_terceros_credito", f"select=*&{term_params}")
+        credit_term = terms[0] if terms else {}
+    except Exception:
+        credit_term = {}
+    condition_key = credit_term.get("condicion_key") or credit_condition_key(
+        credit_term.get("plazo_pago_real"),
+        credit_term.get("observacion") or (invoices[0].get("condicion_pago") if invoices else ""),
+    )
+    if client:
+        client = {
+            **client,
+            "plazo_pago_real": credit_term.get("plazo_pago_real"),
+            "condicion_pago_real": condition_key,
+            "condicion_credito": credit_term.get("condicion_credito"),
+            "cupo_credito": credit_term.get("cupo_credito"),
+            "observacion_credito": credit_term.get("observacion"),
+        }
+    invoices = [
+        {
+            **invoice,
+            "condicion_pago_real": "saldos_a_favor" if money(invoice.get("monto")) < 0 else condition_key,
+            "plazo_pago_real": credit_term.get("plazo_pago_real"),
+            "cupo_credito": credit_term.get("cupo_credito"),
+            "observacion_credito": credit_term.get("observacion"),
+        }
+        for invoice in invoices
+    ]
 
     promise_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "20", "order": "created_at.desc"})
     promises = supabase_get("copacol_promesas_pago", f"select=*&{promise_params}")
@@ -751,6 +838,10 @@ def build_whatsapp_payload(nit: str, requested_by: str = "dashboard") -> dict:
             "saldo_total": client.get("total_saldo"),
             "saldo_vencido": client.get("total_vencido"),
             "saldo_vigente": client.get("total_vigente"),
+            "condicion_pago_real": client.get("condicion_pago_real"),
+            "condicion_credito": client.get("condicion_credito"),
+            "plazo_pago_real": client.get("plazo_pago_real"),
+            "cupo_credito": client.get("cupo_credito"),
             "facturas": client.get("num_facturas"),
             "facturas_vencidas": client.get("num_vencidas"),
             "dias_mora_max": client.get("dias_mora_max"),
@@ -871,10 +962,10 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
     if any(term in q for term in ["composición", "composicion", "compuesta", "mix", "condición", "condicion", "cuenta contable"]):
         aging_txt = ", ".join(f"{key}: {fmt(value)}" for key, value in aging.items() if money(value)) or "sin distribución por edad"
         cond_txt = ", ".join(
-            f"{item.get('condicion', 'sin cuenta')}: {fmt(item.get('saldo'))}"
+            f"{item.get('condicion', 'sin condición')}: {fmt(item.get('saldo'))}"
             for item in condition_mix[:5]
-        ) or "sin composición por cuenta contable"
-        return f"La cartera se compone así: vigente {fmt(ctx.get('total_vigente'))} y vencida {fmt(total_vencido)} sobre {fmt(total_saldo)} total cobrable. Por edad: {aging_txt}. Por cuenta contable de Siigo: {cond_txt}. Para separar Platam, contado, crédito 45 y crédito 60 necesitamos una columna o regla fuente adicional."
+        ) or "sin composición por condición real"
+        return f"La cartera se compone así: vigente {fmt(ctx.get('total_vigente'))} y vencida {fmt(total_vencido)} sobre {fmt(total_saldo)} total cobrable. Por edad: {aging_txt}. Por condición real de crédito: {cond_txt}."
 
     if any(term in q for term in ["factura más vieja", "factura mas vieja", "más antigua", "mas antigua", "mayor mora", "factura vieja"]):
         if overdue_invoices:
@@ -1298,7 +1389,7 @@ class Handler(BaseHTTPRequestHandler):
                     for k, v in (ctx.get("aging") or {}).items()
                 )
                 condition_txt = "\n".join(
-                    f"- {c.get('condicion','sin cuenta')}: {fmt(money(c.get('saldo')))}"
+                    f"- {c.get('condicion','sin condición')}: {fmt(money(c.get('saldo')))}"
                     for c in (ctx.get("condition_mix") or [])[:8]
                 )
                 pareto_txt = "\n".join(
@@ -1330,7 +1421,7 @@ DATOS ACTUALES (corte: {ctx.get('fecha_corte') or 'sin fecha'}):
 DISTRIBUCIÓN POR EDAD:
 {aging_txt}
 
-COMPOSICIÓN POR CUENTA CONTABLE DE SIIGO:
+COMPOSICIÓN POR CONDICIÓN REAL DE CRÉDITO:
 {condition_txt}
 
 TOP CLIENTES CON MAYOR MORA:
@@ -1348,7 +1439,7 @@ ASESORES:
 Reglas de respuesta:
 - Español, tono operativo y directo.
 - Montos en millones (ej: $2.4M).
-- No afirmes que una cuenta contable equivale a Platam, contado, crédito 45 o crédito 60 si el dato fuente no lo trae explícito.
+- Usa la condición real del catálogo de terceros cuando esté disponible: Platam, contado, crédito COPACOL 45 días o crédito COPACOL 60 días.
 - Sé específico: nombra clientes, asesores y montos reales cuando des recomendaciones.
 - Máximo 4 oraciones salvo que pidan análisis completo."""
 

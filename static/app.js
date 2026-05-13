@@ -35,11 +35,13 @@ const agingLabels = {
 };
 
 const conditionLabels = {
-  platam_30d: ["Platam 30d", "#3b82f6"],
-  credito_45d: ["Crédito 45d", "#f97316"],
-  credito_60d: ["Crédito 60d", "#60a5fa"],
+  platam_30d: ["Platam 30 días", "#3b82f6"],
+  platam_60d: ["Platam 60 días", "#2563eb"],
+  credito_45d: ["COPACOL 45 días", "#f97316"],
+  credito_60d: ["COPACOL 60 días", "#60a5fa"],
   credito_otro: ["Crédito otro", "#8b5cf6"],
   contado: ["Contado", "#10b981"],
+  saldos_a_favor: ["Saldos a favor", "#dc2626"],
   "1305050100": ["1305050100 · Clientes nacionales", "#64748b"],
   "1305052200": ["1305052200 · Clientes especiales", "#3b82f6"],
   "1380200200": ["1380200200 · Deudores varios", "#f97316"],
@@ -50,6 +52,7 @@ const conditionLabels = {
   "1380950100": ["1380950100 · Diversos", "#0ea5e9"],
   "2805050100": ["2805050100 · Saldos a favor", "#dc2626"],
   sin_condicion: ["Sin condición", "#64748b"],
+  sin_condicion_real: ["Sin condición real", "#64748b"],
 };
 
 function $(id) {
@@ -118,6 +121,10 @@ function conditionPrefixValue(prefixes, mode = "all") {
       if (mode === "negative" && value >= 0) return sum;
       return sum + value;
     }, 0);
+}
+
+function conditionLabel(key) {
+  return (conditionLabels[key] || [key || "Sin condición"])[0];
 }
 
 function advisorInvoices(code) {
@@ -203,7 +210,8 @@ function buildSellerAging(rows) {
       "181_plus": 0,
       pct_vencido: 0,
     };
-    const value = amount(invoice.monto);
+    const rawValue = amount(invoice.monto);
+    const value = Math.max(rawValue, 0);
     row.total += value;
     row[invoice.aging_bucket] += value;
     if (amount(invoice.dias_mora) > 0) row.vencido += value;
@@ -226,10 +234,12 @@ function buildView() {
   let moraSum = 0;
 
   invoices.forEach((invoice) => {
-    const value = amount(invoice.monto);
+    const rawValue = amount(invoice.monto);
+    const value = Math.max(rawValue, 0);
     const days = amount(invoice.dias_mora);
     aging[invoice.aging_bucket] += value;
-    conditionMap[invoice.condicion_pago || "sin_condicion"] = (conditionMap[invoice.condicion_pago || "sin_condicion"] || 0) + value;
+    const conditionKey = rawValue < 0 ? "saldos_a_favor" : (invoice.condicion_pago_real || invoice.condicion_pago || "sin_condicion_real");
+    conditionMap[conditionKey] = (conditionMap[conditionKey] || 0) + rawValue;
     if (days > 0) {
       totalVencido += value;
       facturasVencidas += 1;
@@ -324,9 +334,10 @@ function renderDashboard() {
   const view = dashboard.view;
   const summary = view.summary;
   const overdueRatio = summary.total_saldo ? summary.total_vencido / summary.total_saldo : 0;
-  const carteraComercial = conditionPrefixValue(["1305"], "positive");
-  const otrosDeudores = conditionPrefixValue(["1380", "1365", "1330"], "positive");
-  const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionPrefixValue(["2805"], "negative"));
+  const credito60 = conditionValue("credito_60d");
+  const credito45 = conditionValue("credito_45d");
+  const contado = conditionValue("contado");
+  const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionValue("saldos_a_favor"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
@@ -342,12 +353,12 @@ function renderDashboard() {
   setText("kpiConcentrationMoney", money.format(summary.concentracion_top10 || 0));
   setText("overduePctCard", pct.format(overdueRatio));
   setText("overduePctHero", pct.format(overdueRatio));
-  setText("kpiCredito60", moneyM(carteraComercial));
-  setText("kpiCredito60Pct", pct.format(carteraComercial / summary.total_saldo || 0));
-  setText("kpiCredito45", moneyM(otrosDeudores));
-  setText("kpiCredito45Pct", pct.format(otrosDeudores / summary.total_saldo || 0));
-  setText("kpiContado", moneyM(saldosFavor));
-  setText("kpiContadoPct", `Saldo a favor ${pct.format(saldosFavor / summary.total_saldo || 0)}`);
+  setText("kpiCredito60", moneyM(credito60));
+  setText("kpiCredito60Pct", pct.format(credito60 / summary.total_saldo || 0));
+  setText("kpiCredito45", moneyM(credito45));
+  setText("kpiCredito45Pct", pct.format(credito45 / summary.total_saldo || 0));
+  setText("kpiContado", moneyM(contado));
+  setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyM(saldosFavor)}` : pct.format(contado / summary.total_saldo || 0));
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
   setText("riskPill", overdueRatio > 0.55 ? "Riesgo alto: priorizar vencidos" : overdueRatio > 0.35 ? "Riesgo medio: seguimiento diario" : "Cartera controlada");
@@ -788,6 +799,7 @@ function clientCards(rows) {
             <span class="tag">${client.prioridad || "Normal"}</span>
           </div>
           <span class="muted">NIT ${client.nit || "-"} · ${client.asesor_nombre || "Sin asesor"}</span>
+          <span class="muted">${conditionLabel(client.condicion_pago_real)}${client.cupo_credito ? ` · Cupo ${moneyM(client.cupo_credito)}` : ""}</span>
           <span class="amount">${money.format(amount(client.total_saldo))}</span>
           <div class="client-split">
             <span>Vencido <b>${money.format(overdue)}</b></span>
@@ -1207,6 +1219,8 @@ function renderDrawer(payload) {
   const infoHtml = `
     <div class="drawer-info-grid">
       <div class="drawer-info-row"><span>Asesor</span><strong>${client.asesor_nombre || "Sin asesor"}</strong></div>
+      <div class="drawer-info-row"><span>Condición</span><strong>${conditionLabel(client.condicion_pago_real)}</strong></div>
+      ${client.cupo_credito ? `<div class="drawer-info-row"><span>Cupo crédito</span><strong>${money.format(amount(client.cupo_credito))}</strong></div>` : ""}
       <div class="drawer-info-row"><span>Ciudad</span><strong>${client.ciudad || "Sin ciudad"}</strong></div>
       ${client.telefono ? `<div class="drawer-info-row"><span>Teléfono</span><strong>${client.telefono}</strong></div>` : ""}
       ${client.direccion ? `<div class="drawer-info-row"><span>Dirección</span><strong>${client.direccion}</strong></div>` : ""}
