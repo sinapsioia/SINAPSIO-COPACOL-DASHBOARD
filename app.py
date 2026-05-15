@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import mimetypes
 import os
@@ -206,10 +205,6 @@ def money(value) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def whole_number(value) -> int:
-    return int(round(money(value)))
 
 
 def normalize_nit(value) -> str:
@@ -715,68 +710,6 @@ def build_import_history_payload() -> dict:
     }
 
 
-def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Missing Supabase configuration")
-    url = f"{SUPABASE_URL}/rest/v1/{table}?{urllib.parse.urlencode({'on_conflict': on_conflict})}"
-    body = json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": f"resolution=merge-duplicates,return=minimal",
-        },
-    )
-    req.add_unredirected_header("X-Upsert", "true")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.status
-
-
-def supabase_bulk_insert(table: str, rows: list[dict]) -> int:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Missing Supabase configuration")
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
-    body = json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.status
-
-
-def supabase_patch(table: str, filters: dict[str, str], row: dict) -> dict:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Missing Supabase configuration")
-    query = urllib.parse.urlencode(filters)
-    url = f"{SUPABASE_URL}/rest/v1/{table}?{query}"
-    body = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="PATCH",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
 def supabase_insert(table: str, row: dict) -> dict:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase configuration")
@@ -1047,169 +980,25 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
     return "Puedo ayudarte con cartera, cobranzas, clientes, asesores, facturas vencidas y prioridades del dashboard. Con los datos actuales, la acción más útil es priorizar clientes por saldo vencido, días de mora y asesor responsable."
 
 
-def confirm_import(token: str, use_n8n: bool = False) -> dict:
+def confirm_import(token: str) -> dict:
     entry = IMPORT_CACHE.get(token)
     if not entry:
         raise ValueError("Token de importación inválido o expirado.")
 
-    if use_n8n:
-        file_bytes = entry.get("file_bytes")
-        if not file_bytes:
-            raise ValueError("El archivo original ya no está disponible para actualizar la base de datos. Vuelve a validar el XLSX.")
-        result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx")
-        del IMPORT_CACHE[token]
-        if isinstance(result, list):
-            result = result[0] if result else {"status": "accepted"}
-        if not isinstance(result, dict):
-            result = {"status": "accepted", "message": str(result)}
-        result.setdefault("status", "imported")
-        result.setdefault("message", "Archivo recibido. La base de datos fue actualizada correctamente.")
-        result["via"] = "n8n"
-        return result
+    file_bytes = entry.get("file_bytes")
+    if not file_bytes:
+        raise ValueError("El archivo original ya no está disponible para actualizar la base de datos. Vuelve a validar el XLSX.")
 
-    records = entry["records"]
-    by_client = entry["by_client"]
-    fecha_corte = entry.get("fecha_corte") or datetime.now().date().isoformat()
-    filename = entry.get("filename") or "cartera-siigo.xlsx"
-
-    positive_total = sum(max(money(record.get("saldo")), 0.0) for record in records)
-    net_total = sum(money(record.get("saldo")) for record in records)
-    aging_summary = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
-    for record in records:
-        saldo = max(money(record.get("saldo")), 0.0)
-        days = money(record.get("dias_mora"))
-        if days <= 0:
-            aging_summary["vigente"] += saldo
-        elif days <= 30:
-            aging_summary["1_30"] += saldo
-        elif days <= 60:
-            aging_summary["31_60"] += saldo
-        elif days <= 90:
-            aging_summary["61_90"] += saldo
-        else:
-            aging_summary["90_plus"] += saldo
-    total_vencido = aging_summary["1_30"] + aging_summary["31_60"] + aging_summary["61_90"] + aging_summary["90_plus"]
-    total_vigente = aging_summary["vigente"]
-
-    batch = supabase_insert(
-        "copacol_import_batches",
-        {
-            "source": "dashboard",
-            "filename": filename,
-            "fecha_corte": fecha_corte,
-            "status": "running",
-            "mode": "snapshot_replace",
-            "clientes": len(by_client),
-            "facturas": len(records),
-            "saldo_total": net_total,
-            "total_vencido": total_vencido,
-            "total_vigente": total_vigente,
-            "aging": aging_summary,
-            "cambios": {},
-            "metadata": {
-                "loaded_from": "dashboard_upload",
-                "saldo_cobrable": positive_total,
-            },
-        },
-    )
-    batch_row = batch[0] if isinstance(batch, list) and batch else batch
-    batch_id = (batch_row or {}).get("id")
-    if not batch_id:
-        raise ValueError("No fue posible crear el registro de importación.")
-
-    # Map records to copacol_facturas columns
-    facturas_rows = [
-        {
-            "nit": r["cliente_nit"],
-            "numero_factura": r["documento"],
-            "monto": r["saldo"],
-            "vlr_mora": r["vlr_mora"],
-            "fecha_emision": r["fecha_emision"],
-            "fecha_vencimiento": r["fecha_vencimiento"],
-            "dias_mora": whole_number(r["dias_mora"]),
-            "condicion_pago": r.get("cuenta", ""),
-            "estado": "vigente" if r["dias_mora"] <= 0 else "vencida",
-            "import_batch_id": batch_id,
-        }
-        for r in records
-    ]
-
-    # Map clients to copacol_clients columns
-    client_rows = [
-        {
-            "nit": c["nit"],
-            "razon_social": c["razon_social"],
-            "ciudad": c.get("ciudad", ""),
-            "asesor_codigo": c.get("asesor_codigo", ""),
-            "asesor_nombre": c.get("asesor_nombre", ""),
-            "telefono": c.get("telefono_1", ""),
-            "telefono_2": c.get("telefono_2", ""),
-            "direccion": c.get("direccion", ""),
-            "total_saldo": c["saldo"],
-            "total_vencido": c.get("vencido", 0.0),
-            "total_vigente": c.get("vigente", 0.0),
-            "num_facturas": whole_number(c["facturas"]),
-            "num_vencidas": whole_number(c["vencidas"]),
-            "dias_mora_max": whole_number(c["dias_mora_max"]),
-            "fecha_corte": fecha_corte,
-            "import_batch_id": batch_id,
-        }
-        for c in by_client.values()
-    ]
-
-    # Upsert in batches of 500
-    def batch_upsert(table: str, rows: list[dict], conflict_col: str) -> None:
-        size = 500
-        for i in range(0, len(rows), size):
-            supabase_upsert(table, rows[i : i + size], conflict_col)
-
-    def batch_insert(table: str, rows: list[dict]) -> None:
-        size = 500
-        for i in range(0, len(rows), size):
-            supabase_bulk_insert(table, rows[i : i + size])
-
-    try:
-        batch_upsert("copacol_clients", client_rows, "nit")
-        batch_insert("copacol_facturas", facturas_rows)
-        supabase_patch(
-            "copacol_import_batches",
-            {"id": f"eq.{batch_id}"},
-            {
-                "status": "completed",
-                "cambios": {
-                    "clientes_upsert": len(client_rows),
-                    "facturas_upsert": len(facturas_rows),
-                },
-            },
-        )
-    except Exception as exc:
-        try:
-            supabase_patch(
-                "copacol_import_batches",
-                {"id": f"eq.{batch_id}"},
-                {
-                    "status": "failed",
-                    "metadata": {
-                        "loaded_from": "dashboard_upload",
-                        "saldo_cobrable": positive_total,
-                        "error": str(exc),
-                    },
-                },
-            )
-        finally:
-            pass
-        raise
-
+    result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx")
     del IMPORT_CACHE[token]
-
-    return {
-        "status": "imported",
-        "facturas": len(facturas_rows),
-        "clientes": len(client_rows),
-        "fecha_corte": fecha_corte,
-        "import_batch_id": batch_id,
-        "message": f"Importación exitosa: {len(facturas_rows)} facturas y {len(client_rows)} clientes actualizados.",
-    }
+    if isinstance(result, list):
+        result = result[0] if result else {"status": "accepted"}
+    if not isinstance(result, dict):
+        result = {"status": "accepted", "message": str(result)}
+    result.setdefault("status", "imported")
+    result.setdefault("message", "Archivo recibido por el flujo de actualización. El tablero se recargará con la cartera procesada.")
+    result["via"] = "n8n"
+    return result
 
 
 XLSX_NS = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -1728,6 +1517,7 @@ class Handler(BaseHTTPRequestHandler):
                     "supabase_url": SUPABASE_URL,
                     "anon_key": SUPABASE_ANON_KEY,
                     "n8n_import_enabled": bool(N8N_IMPORT_WEBHOOK_URL),
+                    "import_mode": "n8n_required",
                     "n8n_proactive_enabled": bool(N8N_PROACTIVE_WEBHOOK_URL),
                 },
             )
@@ -1763,7 +1553,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
-                json_response(self, 200, confirm_import(data.get("token", ""), use_n8n=False))
+                json_response(self, 200, confirm_import(data.get("token", "")))
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return
@@ -1918,42 +1708,14 @@ Reglas de respuesta:
             return
 
         if parsed.path == "/api/n8n/import":
-            auth = self.headers.get("Authorization", "")
-            if not N8N_API_TOKEN or auth != f"Bearer {N8N_API_TOKEN}":
-                json_response(self, 401, {"error": "Unauthorized"})
-                return
-            content_type = self.headers.get("Content-Type", "")
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length)
-            file_bytes = None
-            if "application/json" in content_type:
-                data = json.loads(body.decode("utf-8"))
-                file_b64 = data.get("file_base64", "")
-                if not file_b64:
-                    json_response(self, 400, {"error": "Campo file_base64 requerido."})
-                    return
-                file_bytes = base64.b64decode(file_b64)
-            elif "multipart/form-data" in content_type:
-                file_bytes, _ = extract_multipart_file(body, content_type)
-            elif "openxmlformats" in content_type or "octet-stream" in content_type or "excel" in content_type:
-                # Binary body enviado directamente por n8n (contentType: binaryData)
-                file_bytes = body
-            else:
-                json_response(self, 400, {"error": "Envia application/json con file_base64, multipart/form-data o binario xlsx."})
-                return
-            if not file_bytes:
-                json_response(self, 400, {"error": "No se encontro archivo en la solicitud."})
-                return
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                    tmp.write(file_bytes)
-                    tmp_path = Path(tmp.name)
-                preview = parse_xlsx(tmp_path)
-                tmp_path.unlink(missing_ok=True)
-                result = confirm_import(preview["token"])
-                json_response(self, 200, result)
-            except Exception as exc:
-                json_response(self, 400, {"error": str(exc)})
+            json_response(
+                self,
+                410,
+                {
+                    "error": "Endpoint deshabilitado. La escritura de cartera debe pasar por el webhook n8n configurado en N8N_IMPORT_WEBHOOK_URL.",
+                    "status": "disabled",
+                },
+            )
             return
 
         if parsed.path != "/api/import/preview":

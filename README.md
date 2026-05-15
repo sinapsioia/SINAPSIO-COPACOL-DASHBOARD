@@ -23,4 +23,4 @@ Crear `.env` a partir de `.env.example`. La app lee Supabase desde el backend us
 - Lee KPIs reales desde Supabase.
 - Muestra edad de cartera, vendedores, facturas vencidas y clientes prioritarios.
 - Valida un Excel de Siigo desde la pantalla de carga.
-- La escritura/importación definitiva debe activarse luego de confirmar reglas de reemplazo por corte.
+- La escritura/importación definitiva pasa por el webhook n8n configurado en `N8N_IMPORT_WEBHOOK_URL`; el dashboard no escribe cartera directamente en Supabase.

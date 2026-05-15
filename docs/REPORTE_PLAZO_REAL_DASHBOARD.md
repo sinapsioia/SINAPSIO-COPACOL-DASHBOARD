@@ -174,7 +174,7 @@ vencido
 
 La tabla `copacol_facturas` y los flujos esperan `vencida`/`vigente`, por eso se corrigio.
 
-Nota: la ruta productiva recomendada sigue siendo n8n mediante `N8N_IMPORT_WEBHOOK_URL`. La ruta directa queda como fallback tecnico.
+Nota: la ruta productiva de escritura es n8n mediante `N8N_IMPORT_WEBHOOK_URL`. El dashboard valida el archivo y envia el XLSX al flujo; no debe escribir cartera directamente en Supabase.
 
 ## 4. Cambios en `static/app.js`
 

@@ -855,7 +855,7 @@ async function previewImport(event) {
     if (result.token) {
       importToken = result.token;
       setText("importConfirmMsg", `Importación lista para confirmar`);
-      const route = "Al confirmar se actualizará la base de datos y luego se recargará el tablero.";
+      const route = "Al confirmar se enviará el archivo al flujo de actualización y luego se recargará el tablero.";
       setText("importConfirmDetail", `${number.format(result.facturas)} facturas · ${number.format(result.clientes)} clientes · ${moneyM(result.saldo_total)} · ${route}`);
       $("importConfirm").classList.add("visible");
     }
@@ -1367,7 +1367,7 @@ async function confirmImport() {
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || "Error en importación");
-    renderImportMessage("Importación finalizada", result.message || "Supabase fue actualizado y el tablero se está recargando.", "success");
+    renderImportMessage("Importación enviada", result.message || "El flujo de actualización recibió el archivo y el tablero se está recargando.", "success");
     $("importConfirm").classList.remove("visible");
     importToken = null;
     loadDashboard().catch((err) => status(err.message));
