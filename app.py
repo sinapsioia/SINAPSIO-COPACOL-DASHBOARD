@@ -714,7 +714,7 @@ def build_import_history_payload() -> dict:
 def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase configuration")
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{urllib.parse.urlencode({'on_conflict': on_conflict})}"
     body = json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -730,6 +730,27 @@ def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
     req.add_unredirected_header("X-Upsert", "true")
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.status
+
+
+def supabase_patch(table: str, filters: dict[str, str], row: dict) -> dict:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    query = urllib.parse.urlencode(filters)
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query}"
+    body = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="PATCH",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def supabase_insert(table: str, row: dict) -> dict:
@@ -1025,6 +1046,52 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
     records = entry["records"]
     by_client = entry["by_client"]
     fecha_corte = entry.get("fecha_corte") or datetime.now().date().isoformat()
+    filename = entry.get("filename") or "cartera-siigo.xlsx"
+
+    positive_total = sum(max(money(record.get("saldo")), 0.0) for record in records)
+    net_total = sum(money(record.get("saldo")) for record in records)
+    aging_summary = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
+    for record in records:
+        saldo = max(money(record.get("saldo")), 0.0)
+        days = money(record.get("dias_mora"))
+        if days <= 0:
+            aging_summary["vigente"] += saldo
+        elif days <= 30:
+            aging_summary["1_30"] += saldo
+        elif days <= 60:
+            aging_summary["31_60"] += saldo
+        elif days <= 90:
+            aging_summary["61_90"] += saldo
+        else:
+            aging_summary["90_plus"] += saldo
+    total_vencido = aging_summary["1_30"] + aging_summary["31_60"] + aging_summary["61_90"] + aging_summary["90_plus"]
+    total_vigente = aging_summary["vigente"]
+
+    batch = supabase_insert(
+        "copacol_import_batches",
+        {
+            "source": "dashboard",
+            "filename": filename,
+            "fecha_corte": fecha_corte,
+            "status": "running",
+            "mode": "snapshot_replace",
+            "clientes": len(by_client),
+            "facturas": len(records),
+            "saldo_total": net_total,
+            "total_vencido": total_vencido,
+            "total_vigente": total_vigente,
+            "aging": aging_summary,
+            "cambios": {},
+            "metadata": {
+                "loaded_from": "dashboard_upload",
+                "saldo_cobrable": positive_total,
+            },
+        },
+    )
+    batch_row = batch[0] if isinstance(batch, list) and batch else batch
+    batch_id = (batch_row or {}).get("id")
+    if not batch_id:
+        raise ValueError("No fue posible crear el registro de importación.")
 
     # Map records to copacol_facturas columns
     facturas_rows = [
@@ -1039,6 +1106,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
             "condicion_pago": r.get("cuenta", ""),
             "estado": "vigente" if r["dias_mora"] <= 0 else "vencida",
             "fecha_corte": fecha_corte,
+            "import_batch_id": batch_id,
         }
         for r in records
     ]
@@ -1061,6 +1129,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
             "num_vencidas": c["vencidas"],
             "dias_mora_max": c["dias_mora_max"],
             "fecha_corte": fecha_corte,
+            "import_batch_id": batch_id,
         }
         for c in by_client.values()
     ]
@@ -1071,8 +1140,37 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
         for i in range(0, len(rows), size):
             supabase_upsert(table, rows[i : i + size], conflict_col)
 
-    batch_upsert("copacol_facturas", facturas_rows, "numero_factura")
-    batch_upsert("copacol_clients", client_rows, "nit")
+    try:
+        batch_upsert("copacol_clients", client_rows, "nit")
+        batch_upsert("copacol_facturas", facturas_rows, "numero_factura")
+        supabase_patch(
+            "copacol_import_batches",
+            {"id": f"eq.{batch_id}"},
+            {
+                "status": "completed",
+                "cambios": {
+                    "clientes_upsert": len(client_rows),
+                    "facturas_upsert": len(facturas_rows),
+                },
+            },
+        )
+    except Exception as exc:
+        try:
+            supabase_patch(
+                "copacol_import_batches",
+                {"id": f"eq.{batch_id}"},
+                {
+                    "status": "failed",
+                    "metadata": {
+                        "loaded_from": "dashboard_upload",
+                        "saldo_cobrable": positive_total,
+                        "error": str(exc),
+                    },
+                },
+            )
+        finally:
+            pass
+        raise
 
     del IMPORT_CACHE[token]
 
@@ -1081,6 +1179,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
         "facturas": len(facturas_rows),
         "clientes": len(client_rows),
         "fecha_corte": fecha_corte,
+        "import_batch_id": batch_id,
         "message": f"Importación exitosa: {len(facturas_rows)} facturas y {len(client_rows)} clientes actualizados.",
     }
 
@@ -1636,7 +1735,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
-                json_response(self, 200, confirm_import(data.get("token", ""), use_n8n=bool(N8N_IMPORT_WEBHOOK_URL)))
+                json_response(self, 200, confirm_import(data.get("token", ""), use_n8n=False))
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return

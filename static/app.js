@@ -1372,7 +1372,11 @@ async function confirmImport() {
     importToken = null;
     loadDashboard().catch((err) => status(err.message));
   } catch (err) {
-    $("importResult").textContent = `Error: ${err.message}`;
+    const rawMessage = err.message || "";
+    const detail = /timed out|timeout/i.test(rawMessage)
+      ? "La actualización tardó más de lo esperado. Revisa el historial y vuelve a intentar si la plantilla no aparece como activa."
+      : rawMessage;
+    renderImportMessage("No se pudo completar la actualización", detail, "error");
   } finally {
     $("confirmImportBtn").disabled = false;
     $("confirmImportBtn").textContent = "Confirmar importación";
