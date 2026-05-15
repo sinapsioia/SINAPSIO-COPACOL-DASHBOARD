@@ -5,6 +5,8 @@ import json
 import mimetypes
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import urllib.parse
 import urllib.request
@@ -38,7 +40,12 @@ load_env()
 
 
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    or os.environ.get("SUPABASE_SERVICE_ROLE")
+    or os.environ.get("SUPABASE_SERVICE_KEY")
+    or ""
+)
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-nano")
@@ -1030,7 +1037,7 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
             "fecha_vencimiento": r["fecha_vencimiento"],
             "dias_mora": r["dias_mora"],
             "condicion_pago": r.get("cuenta", ""),
-            "estado": "vigente" if r["dias_mora"] <= 0 else "vencido",
+            "estado": "vigente" if r["dias_mora"] <= 0 else "vencida",
             "fecha_corte": fecha_corte,
         }
         for r in records
@@ -1096,7 +1103,244 @@ def excel_date(value: str) -> str | None:
         return None
 
 
+SPANISH_MONTHS = {
+    "ENE": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "ABR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AGO": 8,
+    "SEP": 9,
+    "SEPT": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DIC": 12,
+}
+
+
+def parse_date_cell(value) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    serial = excel_date(text)
+    if serial:
+        return serial
+    parts = text.upper().replace("-", "/").split("/")
+    if len(parts) == 3 and parts[0] in SPANISH_MONTHS:
+        try:
+            return datetime(int(parts[2]), SPANISH_MONTHS[parts[0]], int(parts[1])).date().isoformat()
+        except ValueError:
+            return None
+    match = re.search(r"(\d{4})/(\d{2})/(\d{2})", text)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    return None
+
+
+def days_between(start_iso: str | None, end_iso: str | None) -> int | None:
+    if not start_iso or not end_iso:
+        return None
+    try:
+        start = datetime.fromisoformat(start_iso).date()
+        end = datetime.fromisoformat(end_iso).date()
+        return (end - start).days
+    except ValueError:
+        return None
+
+
+def add_days(date_iso: str | None, days: int | None) -> str | None:
+    if not date_iso or days is None:
+        return None
+    try:
+        return (datetime.fromisoformat(date_iso).date() + timedelta(days=int(days))).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def detect_report_date(rows: list[list[str]]) -> str | None:
+    for row in rows[:10]:
+        for value in row:
+            parsed = parse_date_cell(value)
+            if parsed:
+                return parsed
+    return None
+
+
+def normalized_header(value) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").strip().upper())
+
+
+def find_header_index(rows: list[list[str]]) -> int:
+    expected = {"CIUDAD", "VENDED", "NIT", "DOCUMENTO", "FECHA", "VENCE", "DIAS", "SALDO"}
+    for idx, row in enumerate(rows[:30]):
+        headers = {normalized_header(value) for value in row}
+        if len(headers & expected) >= 5:
+            return idx
+    raise ValueError("No se encontró la fila de encabezados del reporte Siigo.")
+
+
+def find_header_col(headers: list[str], *needles: str) -> int | None:
+    normalized_needles = [normalized_header(needle) for needle in needles]
+    for idx, header in enumerate(headers):
+        if any(needle and needle in header for needle in normalized_needles):
+            return idx
+    return None
+
+
+def safe_cell(row: list[str], idx: int | None) -> str:
+    if idx is None or idx >= len(row):
+        return ""
+    return str(row[idx] or "").strip()
+
+
+def credit_terms_by_nit() -> dict[str, dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    try:
+        rows = fetch_all(
+            "copacol_terceros_credito",
+            "nit,plazo_pago_real,condicion_key,condicion_credito",
+            "nit.asc",
+        )
+    except Exception:
+        return {}
+    terms: dict[str, dict] = {}
+    for row in rows:
+        nit = normalize_nit(row.get("nit"))
+        plazo = money(row.get("plazo_pago_real"))
+        if not nit or plazo <= 0:
+            continue
+        terms[nit] = {
+            "plazo_pago_real": int(plazo),
+            "condicion_key": row.get("condicion_key"),
+            "condicion_credito": row.get("condicion_credito"),
+        }
+    return terms
+
+
+def condition_from_days(days: int | None) -> str:
+    if days is None:
+        return "contado"
+    plazo = abs(int(days))
+    if plazo <= 2:
+        return "contado"
+    if plazo <= 32:
+        return "platam_30d"
+    if plazo <= 48:
+        return "credito_45d"
+    if plazo <= 65:
+        return "credito_60d"
+    return "credito_otro"
+
+
 def parse_xlsx(path: Path) -> dict:
+    transformer = Path(__file__).resolve().parents[1] / "Copacol" / "cartera_to_supabase.py"
+    if transformer.exists():
+        env = os.environ.copy()
+        if SUPABASE_URL:
+            env.setdefault("SUPABASE_URL", SUPABASE_URL)
+        if SUPABASE_KEY:
+            env.setdefault("SUPABASE_SERVICE_ROLE", SUPABASE_KEY)
+            env.setdefault("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(transformer),
+                str(path),
+                "--format",
+                "json",
+            ],
+            cwd=str(transformer.parent),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "Error desconocido").strip()
+            raise ValueError(f"No se pudo transformar la cartera con plazo real: {detail}")
+        payload = json.loads(completed.stdout)
+        summary = payload.get("summary") or {}
+        facturas_payload = payload.get("facturas") or []
+        clients_payload = payload.get("clients") or []
+        aging = summary.get("aging") or {}
+        records = [
+            {
+                "ciudad": "",
+                "vendedor_codigo": "",
+                "vendedor_nombre": "",
+                "cliente_nit": row.get("nit"),
+                "cliente_nombre": "",
+                "telefono_1": "",
+                "telefono_2": "",
+                "direccion": "",
+                "cuenta": row.get("condicion_pago") or "",
+                "documento": row.get("numero_factura"),
+                "fecha_emision": row.get("fecha_emision"),
+                "fecha_vencimiento": row.get("fecha_vencimiento"),
+                "dias_mora": row.get("dias_mora") or 0,
+                "vlr_mora": row.get("vlr_mora") or 0,
+                "saldo": row.get("monto") or 0,
+            }
+            for row in facturas_payload
+        ]
+        by_client = {
+            row.get("nit"): {
+                "nit": row.get("nit"),
+                "razon_social": row.get("razon_social") or "Sin nombre",
+                "saldo": row.get("total_saldo") or 0,
+                "vencido": row.get("total_vencido") or 0,
+                "vigente": row.get("total_vigente") or 0,
+                "facturas": row.get("num_facturas") or 0,
+                "vencidas": row.get("num_vencidas") or 0,
+                "dias_mora_max": row.get("dias_mora_max") or 0,
+                "ciudad": row.get("ciudad") or "",
+                "asesor_codigo": row.get("asesor_codigo") or "",
+                "asesor_nombre": row.get("asesor_nombre") or "",
+                "telefono_1": row.get("telefono") or "",
+                "telefono_2": row.get("telefono_2") or "",
+                "direccion": row.get("direccion") or "",
+            }
+            for row in clients_payload
+            if row.get("nit")
+        }
+        by_seller: dict[str, float] = defaultdict(float)
+        for row in clients_payload:
+            key = f"{row.get('asesor_codigo') or 'sin_codigo'} - {row.get('asesor_nombre') or 'Sin asesor'}"
+            by_seller[key] += money(row.get("total_saldo"))
+        import_token = str(uuid.uuid4())
+        fecha_corte = payload.get("report_date") or summary.get("fecha_corte")
+        IMPORT_CACHE[import_token] = {
+            "records": records,
+            "by_client": by_client,
+            "fecha_corte": fecha_corte,
+            "created_at": datetime.now().isoformat(),
+        }
+        preview = {
+            "status": "preview",
+            "token": import_token,
+            "fecha_corte_detectada": fecha_corte,
+            "facturas": len(facturas_payload),
+            "clientes": len(clients_payload),
+            "vendedores": len(by_seller),
+            "saldo_total": summary.get("saldo_total") or 0,
+            "saldo_neto": summary.get("saldo_total") or 0,
+            "saldos_a_favor": abs(sum(money(row.get("monto")) for row in facturas_payload if money(row.get("monto")) < 0)),
+            "aging": aging,
+            "plazo_real": summary.get("plazo_real") or {},
+            "top_clientes": sorted(by_client.values(), key=lambda c: money(c.get("saldo")), reverse=True)[:10],
+            "top_vendedores": [
+                {"vendedor": key, "saldo": value}
+                for key, value in sorted(by_seller.items(), key=lambda item: item[1], reverse=True)[:10]
+            ],
+            "message": "Validación lista. Confirma para escribir en Supabase.",
+        }
+        preview["control_cambios"] = snapshot_control_from_preview(preview)
+        return preview
+
     with zipfile.ZipFile(path) as archive:
         shared: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
@@ -1119,64 +1363,127 @@ def parse_xlsx(path: Path) -> dict:
                         value = raw_value.text or ""
                 values[column_number(ref)] = value
             if values:
-                rows.append([values.get(index, "") for index in range(1, 21)])
+                rows.append([values.get(index, "") for index in range(1, max(values) + 1)])
 
     if len(rows) < 7:
         raise ValueError("El archivo no tiene suficientes filas para ser una cartera de Siigo.")
 
-    expected = ["CIUDAD", "VENDED", "NIT", "DOCUMENTO", "FECHA", "VENCE", "DIAS", "SALDO"]
-    header = [str(value).strip() for value in rows[5]]
+    header_index = find_header_index(rows)
+    header = [normalized_header(value) for value in rows[header_index]]
+    expected = ["NIT", "DOCUMENTO", "FECHA", "VENCE", "SALDO"]
     missing = [item for item in expected if item not in header]
     if missing:
         raise ValueError(f"No se encontraron columnas esperadas: {', '.join(missing)}")
 
+    cols = {
+        "ciudad": find_header_col(header, "CIUDAD"),
+        "vendedor_codigo": find_header_col(header, "VENDED", "VENDEDOR"),
+        "vendedor_nombre": find_header_col(header, "NOMBREASESOR"),
+        "nit": find_header_col(header, "NIT"),
+        "cliente_nombre": find_header_col(header, "NOMBRE"),
+        "telefono_1": find_header_col(header, "TEL1", "TEL_1"),
+        "telefono_2": find_header_col(header, "TEL2", "TEL_2"),
+        "direccion": find_header_col(header, "DIRECCION"),
+        "cuenta": find_header_col(header, "CUENTA"),
+        "tipo_mov": find_header_col(header, "TIPOMOV"),
+        "documento": find_header_col(header, "DOCUMENTO"),
+        "fecha": find_header_col(header, "FECHA"),
+        "vence": find_header_col(header, "VENCE"),
+        "dias": find_header_col(header, "DIAS"),
+        "vlr_mora": find_header_col(header, "VLRMORA"),
+        "saldo": find_header_col(header, "SALDO"),
+    }
+    if cols["vendedor_nombre"] is None and header.count("NOMBRE") >= 2 and len(header) >= 4 and header[3] == "NOMBRE":
+        cols["vendedor_nombre"] = 3
+    if cols["cliente_nombre"] == cols["vendedor_nombre"]:
+        later_nombre = [idx for idx, value in enumerate(header) if value == "NOMBRE" and idx != cols["vendedor_nombre"]]
+        if later_nombre:
+            cols["cliente_nombre"] = later_nombre[0]
+    if cols["tipo_mov"] is None and len(header) >= 20 and header[11] == "":
+        cols["tipo_mov"] = 11
+
+    cut_date = detect_report_date(rows)
+    credit_terms = credit_terms_by_nit()
+
     records = []
     by_client: dict[str, dict] = {}
     by_seller: dict[str, float] = defaultdict(float)
-    aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
+    aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "91_120": 0.0, "121_180": 0.0, "181_plus": 0.0}
     total_saldo = 0.0
     saldo_neto = 0.0
     saldos_a_favor = 0.0
+    real_term_invoice_count = 0
+    fallback_invoice_count = 0
+    real_term_clients: set[str] = set()
+    fallback_clients: set[str] = set()
 
-    for raw in rows[6:]:
-        if len(raw) < 20:
+    for raw in rows[header_index + 1:]:
+        nit = safe_cell(raw, cols["nit"])
+        documento = safe_cell(raw, cols["documento"])
+        fecha_emision = parse_date_cell(safe_cell(raw, cols["fecha"]))
+        fecha_vencimiento_original = parse_date_cell(safe_cell(raw, cols["vence"]))
+        if not documento or not nit or not fecha_emision:
             continue
-        if not raw[13] or not raw[4]:
+        tipo_mov = (safe_cell(raw, cols["tipo_mov"]) if cols["tipo_mov"] is not None else "F").strip().upper()
+        if tipo_mov not in {"F", "R", "G", "N", "L"}:
             continue
         if any(str(value).strip().startswith("Total") for value in raw):
             continue
 
-        saldo = money(raw[19])
-        dias = money(raw[17])
-        nit = str(raw[4]).strip()
-        seller_code = str(raw[2]).strip() or "sin_codigo"
-        seller_name = str(raw[3]).strip() or "Sin asesor"
-        client_name = str(raw[6]).strip() or "Sin nombre"
+        nit_key = normalize_nit(nit)
+        term = credit_terms.get(nit_key)
+        original_term_days = days_between(fecha_emision, fecha_vencimiento_original)
+        if term:
+            plazo_real = term["plazo_pago_real"]
+            fecha_vencimiento = add_days(fecha_emision, plazo_real) or fecha_vencimiento_original
+            dias = days_between(fecha_vencimiento, cut_date) if cut_date else None
+            condition = term.get("condicion_key") or condition_from_days(plazo_real)
+            real_term_invoice_count += 1
+            real_term_clients.add(nit_key)
+        else:
+            plazo_real = None
+            fecha_vencimiento = fecha_vencimiento_original
+            dias = money(safe_cell(raw, cols["dias"]))
+            if not dias and fecha_vencimiento and cut_date:
+                calculated = days_between(fecha_vencimiento, cut_date)
+                dias = calculated if calculated is not None else 0
+            condition = condition_from_days(original_term_days)
+            fallback_invoice_count += 1
+            fallback_clients.add(nit_key)
+        if dias is None:
+            dias = 0
+
+        saldo = money(safe_cell(raw, cols["saldo"]))
+        seller_code = safe_cell(raw, cols["vendedor_codigo"]) or "sin_codigo"
+        seller_name = safe_cell(raw, cols["vendedor_nombre"]) or "Sin asesor"
+        client_name = safe_cell(raw, cols["cliente_nombre"]) or "Sin nombre"
 
         record = {
-            "ciudad": str(raw[0]).strip(),
+            "ciudad": safe_cell(raw, cols["ciudad"]),
             "vendedor_codigo": seller_code,
             "vendedor_nombre": seller_name,
             "cliente_nit": nit,
             "cliente_nombre": client_name,
-            "telefono_1": str(raw[7]).strip(),
-            "telefono_2": str(raw[8]).strip(),
-            "direccion": str(raw[9]).strip(),
-            "cuenta": str(raw[10]).strip(),
-            "documento": str(raw[13]).strip(),
-            "fecha_emision": excel_date(raw[15]),
-            "fecha_vencimiento": excel_date(raw[16]),
+            "telefono_1": safe_cell(raw, cols["telefono_1"]),
+            "telefono_2": safe_cell(raw, cols["telefono_2"]),
+            "direccion": safe_cell(raw, cols["direccion"]),
+            "cuenta": condition,
+            "documento": documento,
+            "fecha_emision": fecha_emision,
+            "fecha_vencimiento": fecha_vencimiento,
             "dias_mora": dias,
-            "vlr_mora": money(raw[18]),
+            "vlr_mora": money(safe_cell(raw, cols["vlr_mora"])),
             "saldo": saldo,
+            "plazo_pago_real": plazo_real,
+            "plazo_pago_fuente": "copacol_terceros_credito" if term else "cartera_original",
         }
         records.append(record)
         saldo_neto += saldo
         saldo_cobrable = saldo if saldo > 0 else 0.0
         if saldo < 0:
             saldos_a_favor += abs(saldo)
-        total_saldo += saldo_cobrable
-        by_seller[f"{seller_code} - {seller_name}"] += saldo_cobrable
+        total_saldo += saldo
+        by_seller[f"{seller_code} - {seller_name}"] += saldo
 
         client = by_client.setdefault(
             nit,
@@ -1196,23 +1503,19 @@ def parse_xlsx(path: Path) -> dict:
             client["dias_mora_max"] = max(client["dias_mora_max"], dias)
 
         if dias <= 0:
-            aging["vigente"] += saldo_cobrable
+            aging["vigente"] += saldo
         elif dias <= 30:
-            aging["1_30"] += saldo_cobrable
+            aging["1_30"] += saldo
         elif dias <= 60:
-            aging["31_60"] += saldo_cobrable
+            aging["31_60"] += saldo
         elif dias <= 90:
-            aging["61_90"] += saldo_cobrable
+            aging["61_90"] += saldo
+        elif dias <= 120:
+            aging["91_120"] += saldo
+        elif dias <= 180:
+            aging["121_180"] += saldo
         else:
-            aging["90_plus"] += saldo_cobrable
-
-    cut_date = None
-    for row in rows[:6]:
-        joined = " ".join(str(value) for value in row)
-        match = re.search(r"(\d{4}/\d{2}/\d{2})", joined)
-        if match:
-            cut_date = match.group(1).replace("/", "-")
-            break
+            aging["181_plus"] += saldo
 
     # Enrich by_client with extra fields needed for import
     for r in records:
@@ -1251,6 +1554,14 @@ def parse_xlsx(path: Path) -> dict:
         "saldo_neto": saldo_neto,
         "saldos_a_favor": saldos_a_favor,
         "aging": aging,
+        "plazo_real": {
+            "fuente_facturas": {
+                "copacol_terceros_credito": real_term_invoice_count,
+                "cartera_original": fallback_invoice_count,
+            },
+            "clientes_con_plazo_real": len(real_term_clients),
+            "clientes_sin_plazo_real_fallback_cartera": len(fallback_clients),
+        },
         "top_clientes": sorted(by_client.values(), key=lambda c: c["saldo"], reverse=True)[:10],
         "top_vendedores": [
             {"vendedor": key, "saldo": value}

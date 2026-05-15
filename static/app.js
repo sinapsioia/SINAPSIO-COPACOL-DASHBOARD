@@ -799,7 +799,7 @@ function clientCards(rows) {
             <span class="tag">${client.prioridad || "Normal"}</span>
           </div>
           <span class="muted">NIT ${client.nit || "-"} · ${client.asesor_nombre || "Sin asesor"}</span>
-          <span class="muted">${conditionLabel(client.condicion_pago_real)}${client.cupo_credito ? ` · Cupo ${moneyM(client.cupo_credito)}` : ""}</span>
+          <span class="muted">${conditionLabel(client.condicion_pago_real)}${client.plazo_pago_real ? ` · Plazo real ${number.format(client.plazo_pago_real)} días` : ""}${client.cupo_credito ? ` · Cupo ${moneyM(client.cupo_credito)}` : ""}</span>
           <span class="amount">${money.format(amount(client.total_saldo))}</span>
           <div class="client-split">
             <span>Vencido <b>${money.format(overdue)}</b></span>
@@ -950,6 +950,10 @@ function renderImportPreview(result) {
 
   const el = $("importResult");
   el.className = "import-result import-preview";
+  const plazo = result.plazo_real || {};
+  const sourceCounts = plazo.fuente_facturas || {};
+  const realTermInvoices = amount(sourceCounts.copacol_terceros_credito);
+  const fallbackInvoices = amount(sourceCounts.cartera_original);
   el.innerHTML = `
     <div class="import-status-head">
       <div>
@@ -964,6 +968,7 @@ function renderImportPreview(result) {
       <article><span>Facturas</span><strong>${number.format(result.facturas || 0)}</strong></article>
       <article><span>Clientes</span><strong>${number.format(result.clientes || 0)}</strong></article>
       <article><span>Vendedores</span><strong>${number.format(result.vendedores || 0)}</strong></article>
+      <article><span>Plazo real</span><strong>${number.format(realTermInvoices)} docs</strong><small>${number.format(fallbackInvoices)} fallback</small></article>
     </div>
     ${changeControl}
     <div class="import-preview-grid">
@@ -1220,6 +1225,7 @@ function renderDrawer(payload) {
     <div class="drawer-info-grid">
       <div class="drawer-info-row"><span>Asesor</span><strong>${client.asesor_nombre || "Sin asesor"}</strong></div>
       <div class="drawer-info-row"><span>Condición</span><strong>${conditionLabel(client.condicion_pago_real)}</strong></div>
+      <div class="drawer-info-row"><span>Plazo real</span><strong>${client.plazo_pago_real ? `${number.format(client.plazo_pago_real)} días` : "Fallback cartera"}</strong></div>
       ${client.cupo_credito ? `<div class="drawer-info-row"><span>Cupo crédito</span><strong>${money.format(amount(client.cupo_credito))}</strong></div>` : ""}
       <div class="drawer-info-row"><span>Ciudad</span><strong>${client.ciudad || "Sin ciudad"}</strong></div>
       ${client.telefono ? `<div class="drawer-info-row"><span>Teléfono</span><strong>${client.telefono}</strong></div>` : ""}
