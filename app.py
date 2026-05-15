@@ -208,6 +208,10 @@ def money(value) -> float:
         return 0.0
 
 
+def whole_number(value) -> int:
+    return int(round(money(value)))
+
+
 def normalize_nit(value) -> str:
     return re.sub(r"\D+", "", str(value or ""))
 
@@ -732,6 +736,26 @@ def supabase_upsert(table: str, rows: list[dict], on_conflict: str) -> int:
         return resp.status
 
 
+def supabase_bulk_insert(table: str, rows: list[dict]) -> int:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    body = json.dumps(rows, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.status
+
+
 def supabase_patch(table: str, filters: dict[str, str], row: dict) -> dict:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase configuration")
@@ -1102,10 +1126,9 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
             "vlr_mora": r["vlr_mora"],
             "fecha_emision": r["fecha_emision"],
             "fecha_vencimiento": r["fecha_vencimiento"],
-            "dias_mora": r["dias_mora"],
+            "dias_mora": whole_number(r["dias_mora"]),
             "condicion_pago": r.get("cuenta", ""),
             "estado": "vigente" if r["dias_mora"] <= 0 else "vencida",
-            "fecha_corte": fecha_corte,
             "import_batch_id": batch_id,
         }
         for r in records
@@ -1125,9 +1148,9 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
             "total_saldo": c["saldo"],
             "total_vencido": c.get("vencido", 0.0),
             "total_vigente": c.get("vigente", 0.0),
-            "num_facturas": c["facturas"],
-            "num_vencidas": c["vencidas"],
-            "dias_mora_max": c["dias_mora_max"],
+            "num_facturas": whole_number(c["facturas"]),
+            "num_vencidas": whole_number(c["vencidas"]),
+            "dias_mora_max": whole_number(c["dias_mora_max"]),
             "fecha_corte": fecha_corte,
             "import_batch_id": batch_id,
         }
@@ -1140,9 +1163,14 @@ def confirm_import(token: str, use_n8n: bool = False) -> dict:
         for i in range(0, len(rows), size):
             supabase_upsert(table, rows[i : i + size], conflict_col)
 
+    def batch_insert(table: str, rows: list[dict]) -> None:
+        size = 500
+        for i in range(0, len(rows), size):
+            supabase_bulk_insert(table, rows[i : i + size])
+
     try:
         batch_upsert("copacol_clients", client_rows, "nit")
-        batch_upsert("copacol_facturas", facturas_rows, "numero_factura")
+        batch_insert("copacol_facturas", facturas_rows)
         supabase_patch(
             "copacol_import_batches",
             {"id": f"eq.{batch_id}"},
