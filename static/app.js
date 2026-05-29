@@ -417,6 +417,39 @@ function renderDashboard() {
   });
   setText("kpiRotation", `${number.format(Math.round(summary.rotacion_cartera_dias || 0))} días`);
   setText("kpiRotationDetail", "Promedio ponderado sobre toda la cartera");
+  const promesasResumen = dashboard.promesas_resumen || {};
+  const gestionCobertura = dashboard.gestion_cobertura || {};
+  const deterioroRows = dashboard.clientes_deterioro || [];
+  const pctPromesas = amount(summary.pct_promesas_cumplidas);
+  const pctCoberturaSemana = amount(summary.pct_gestion_cobertura_semana);
+  const pctCoberturaHoy = amount(summary.pct_gestion_cobertura_hoy);
+  setText(
+    "kpiPromesasCumplidas",
+    promesasResumen.total ? pct.format(pctPromesas) : "Sin registros",
+  );
+  setText(
+    "kpiPromesasCumplidasDetail",
+    promesasResumen.total
+      ? `${number.format(promesasResumen.cumplidas || 0)} cumplidas · ${number.format(promesasResumen.pendientes || 0)} pendientes`
+      : "Registra promesas desde la ficha del cliente",
+  );
+  setText(
+    "kpiGestionCobro",
+    gestionCobertura.total_clientes_vencidos ? pct.format(pctCoberturaSemana) : "Sin gestiones",
+  );
+  setText(
+    "kpiGestionCobroDetail",
+    gestionCobertura.total_clientes_vencidos
+      ? `${number.format(gestionCobertura.contactados_semana || 0)} / ${number.format(gestionCobertura.total_clientes_vencidos)} vencidos cubiertos · hoy ${pct.format(pctCoberturaHoy)}`
+      : "Sin clientes vencidos por cubrir",
+  );
+  setText("kpiDeterioro", number.format(deterioroRows.length));
+  setText(
+    "kpiDeterioroDetail",
+    deterioroRows.length
+      ? `Mayor incremento: ${moneyM(deterioroRows[0].delta_vencido)}`
+      : "Sin clientes con incremento vs. corte anterior",
+  );
   $("donut").style.setProperty("--pct", `${Math.min(100, overdueRatio * 100)}%`);
   $("overdueProgress").style.width = `${Math.min(100, overdueRatio * 100)}%`;
 
@@ -618,6 +651,141 @@ function renderInsights() {
   renderDueSoonChart();
   renderContactChart();
   renderAdvisorRiskMap();
+  renderWeeklyTrend();
+  renderDeterioro();
+  renderPromesasResumen();
+  renderGestionAuxiliares();
+}
+
+function renderWeeklyTrend() {
+  const target = $("weeklyTrendChart");
+  if (!target) return;
+  const rows = dashboard.weekly_trend || [];
+  if (!rows.length) {
+    target.innerHTML = '<p class="drawer-empty">Aún no hay suficientes cortes confirmados para calcular tendencia.</p>';
+    return;
+  }
+  const maxPct = Math.max(...rows.map((row) => amount(row.pct_vencido)), 0.16);
+  target.innerHTML = `
+    <div class="trend-track">
+      ${rows.map((row) => {
+        const ratio = amount(row.pct_vencido);
+        const height = Math.max(6, (ratio / maxPct) * 100);
+        const tone = ratio <= 0.08 ? "green" : ratio <= 0.15 ? "yellow" : "red";
+        return `
+          <div class="trend-col">
+            <div class="trend-bar"><i class="${tone}" style="height:${height}%" title="${moneyM(row.total_vencido)} / ${moneyM(row.total_saldo)}"></i></div>
+            <strong>${pct.format(ratio)}</strong>
+            <span>${escapeHtml(row.fecha_corte || "-")}</span>
+          </div>
+        `;
+      }).join("")}
+    </div>
+    <div class="trend-meta">
+      <span>Meta verde ≤ 8% · Amarillo 8-15% · Rojo &gt; 15%</span>
+      <span>${number.format(rows.length)} cortes registrados</span>
+    </div>
+  `;
+}
+
+function renderDeterioro() {
+  const target = $("deterioroList");
+  if (!target) return;
+  const rows = dashboard.clientes_deterioro || [];
+  if (!rows.length) {
+    target.innerHTML = '<p class="drawer-empty">Ningún cliente aumentó su vencido frente al corte anterior.</p>';
+    return;
+  }
+  target.innerHTML = rows.slice(0, 8).map((row) => `
+    <button class="deterioro-row" data-nit="${escapeHtml(row.nit || "")}">
+      <div>
+        <strong>${escapeHtml(row.razon_social || "Cliente")}</strong>
+        <span>${escapeHtml(row.asesor_nombre || "Sin asesor")} · ${number.format(row.dias_mora_actual)}d (antes ${number.format(row.dias_mora_anterior)}d)</span>
+      </div>
+      <div class="deterioro-delta">
+        <b>${moneyM(row.vencido_actual)}</b>
+        <em>+${moneyM(row.delta_vencido)}</em>
+      </div>
+    </button>
+  `).join("");
+  target.querySelectorAll(".deterioro-row").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nit = button.dataset.nit;
+      if (nit) openClientDrawer(nit);
+    });
+  });
+}
+
+function renderPromesasResumen() {
+  const target = $("promesasResumen");
+  if (!target) return;
+  const data = dashboard.promesas_resumen || {};
+  if (!data.total) {
+    target.innerHTML = '<p class="drawer-empty">Aún no hay promesas registradas. Usa "+ Registrar promesa" desde la ficha del cliente.</p>';
+    return;
+  }
+  const total = data.total || 0;
+  const items = [
+    { label: "Cumplidas", value: data.cumplidas || 0, tone: "ok" },
+    { label: "Pendientes", value: data.pendientes || 0, tone: "warn" },
+    { label: "Incumplidas", value: data.incumplidas || 0, tone: "bad" },
+  ];
+  target.innerHTML = `
+    <div class="promesas-summary">
+      <div class="promesas-ratio">
+        <strong>${pct.format(amount(data.pct_cumplidas))}</strong>
+        <span>cumplidas de las resueltas</span>
+      </div>
+      <div class="promesas-bars">
+        ${items.map((item) => `
+          <div class="promesa-bar ${item.tone}">
+            <span>${item.label}</span>
+            <div><i style="width:${total ? (item.value / total) * 100 : 0}%"></i></div>
+            <strong>${number.format(item.value)}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderGestionAuxiliares() {
+  const target = $("gestionAuxiliares");
+  if (!target) return;
+  const data = dashboard.gestion_cobertura || {};
+  const auxiliares = data.top_auxiliares || [];
+  if (!auxiliares.length) {
+    target.innerHTML = '<p class="drawer-empty">Aún no hay gestiones registradas esta semana.</p>';
+    return;
+  }
+  const max = Math.max(...auxiliares.map((row) => amount(row.contactos_semana)), 1);
+  target.innerHTML = `
+    <div class="gestion-summary">
+      <div>
+        <strong>${number.format(data.contactados_semana || 0)}</strong>
+        <span>clientes vencidos contactados esta semana</span>
+      </div>
+      <div>
+        <strong>${pct.format(amount(data.pct_cobertura_semana))}</strong>
+        <span>cobertura sobre ${number.format(data.total_clientes_vencidos || 0)} vencidos</span>
+      </div>
+    </div>
+    <div class="gestion-bars">
+      ${auxiliares.map((row) => {
+        const width = Math.max(4, (amount(row.contactos_semana) / max) * 100);
+        return `
+          <div class="gestion-row">
+            <div>
+              <strong>${escapeHtml(row.nombre || "Sin asignar")}</strong>
+              <span>${number.format(row.clientes_semana)} clientes · hoy ${number.format(row.contactos_hoy)}</span>
+            </div>
+            <div class="gestion-track"><i style="width:${width}%"></i></div>
+            <b>${number.format(row.contactos_semana)}</b>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 function renderPareto() {

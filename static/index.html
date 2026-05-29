@@ -232,18 +232,23 @@
             </div>
             <div>
               <span>Promesas cumplidas</span>
-              <strong>Base por construir</strong>
-              <small>Meta: ≥ 70%</small>
+              <strong id="kpiPromesasCumplidas">-</strong>
+              <small id="kpiPromesasCumplidasDetail">Meta: ≥ 70%</small>
             </div>
             <div>
               <span>Gestión cobro</span>
-              <strong>Base por construir</strong>
-              <small>Meta: ≥ 90%</small>
+              <strong id="kpiGestionCobro">-</strong>
+              <small id="kpiGestionCobroDetail">Meta: ≥ 90% en 7 días</small>
             </div>
             <div>
               <span>Sin gestión 5d</span>
               <strong id="kpiNoGestion5d">-</strong>
               <small>Clientes vencidos sin contacto</small>
+            </div>
+            <div>
+              <span>Clientes en deterioro</span>
+              <strong id="kpiDeterioro">-</strong>
+              <small id="kpiDeterioroDetail">Mayor vencido vs. corte anterior</small>
             </div>
           </div>
         </section>
@@ -388,6 +393,46 @@
                 </div>
               </div>
               <div id="advisorRiskMap" class="risk-map"></div>
+            </article>
+
+            <article class="panel insight-panel large">
+              <div class="section-head">
+                <div>
+                  <h2>Tendencia semanal cartera vencida</h2>
+                  <span class="muted">Últimos 8 cortes confirmados — meta 8%</span>
+                </div>
+              </div>
+              <div id="weeklyTrendChart" class="trend-chart"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Clientes en deterioro</h2>
+                  <span class="muted">Aumento de vencido vs. corte anterior</span>
+                </div>
+              </div>
+              <div id="deterioroList" class="deterioro-list"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Promesas de pago</h2>
+                  <span class="muted">Cumplidas vs. incumplidas vs. pendientes</span>
+                </div>
+              </div>
+              <div id="promesasResumen" class="promesas-resumen"></div>
+            </article>
+
+            <article class="panel insight-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Cobertura por auxiliar</h2>
+                  <span class="muted">Gestiones registradas en los últimos 7 días</span>
+                </div>
+              </div>
+              <div id="gestionAuxiliares" class="gestion-list"></div>
             </article>
           </div>
         </section>

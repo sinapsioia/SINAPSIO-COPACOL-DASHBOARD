@@ -1,6 +1,6 @@
 # Respuesta a Solicitudes SINAPSIO - Dashboard COPACOL
 
-Fecha de actualización: 2026-05-28
+Fecha de actualización: 2026-05-28 (segunda iteración)
 
 ## Cambios aplicados en el dashboard
 
@@ -58,6 +58,27 @@ Fecha de actualización: 2026-05-28
    - Color secundario COPACOL: #FF6900
    - Se dejó Canaro como primera opción tipográfica cuando esté disponible en el navegador.
 
+10. Tendencia semanal de cartera vencida:
+    - Nuevo panel en Inteligencia con últimos 8 cortes confirmados.
+    - Cada barra se colorea por semáforo (verde ≤ 8%, amarillo 8-15%, rojo > 15%).
+    - Usa el historial real de `copacol_import_batches`; no requiere snapshots manuales adicionales.
+
+11. Clientes en deterioro:
+    - Nuevo panel y KPI en Tablero que comparan el corte activo contra el corte anterior por NIT.
+    - Lista los clientes cuyo saldo vencido o días de mora aumentaron, ordenados por mayor incremento.
+    - Clic en una tarjeta abre la ficha del cliente.
+
+12. Promesas cumplidas automáticas:
+    - Indicador real en Tablero y panel de seguimiento en Inteligencia.
+    - Cruza `copacol_promesas_pago` con `copacol_pagos_reportados` por NIT y monto.
+    - Una promesa se marca cumplida si hay pago reportado >= 85% del monto prometido luego de la fecha de promesa, o si su estado quedó marcado manualmente.
+    - El detalle muestra cumplidas, pendientes e incumplidas.
+
+13. Gestión cobro automática por auxiliar:
+    - KPI real de cobertura en Tablero (clientes vencidos contactados últimos 7 días).
+    - Panel "Cobertura por auxiliar" en Inteligencia con ranking por gestiones registradas en `copacol_log_contactos`.
+    - Muestra cobertura del día y de la semana, además de gestiones por persona.
+
 ## Respuestas funcionales para el cliente
 
 ### Saldo mínimo
@@ -79,33 +100,25 @@ Para calcular DSO real se necesita el valor de ventas del mes desde Siigo. La f�
 
 El dashboard ya tiene la cartera total; falta conectar ventas mensuales para que el indicador sea automático y comparable contra benchmark 35-45 días.
 
-## Pendientes que requieren fuente de datos o alcance adicional
+## Pendientes que requieren fuente de datos externa
 
-1. Promedio de días de pago por cliente:
-   - Requiere historial de pagos o fecha real de recaudo.
+1. DSO real (rotación con ventas):
+   - Falta conectar ventas mensuales desde Siigo para aplicar `DSO = (Cartera / Ventas mes) * 30`.
+   - El indicador "Rotación cartera" actual usa promedio ponderado de días sobre cartera abierta como aproximación.
 
-2. Promedio de compras por cliente:
-   - Requiere ventas/facturación histórica, no solo cartera abierta.
+2. Promedio de días de pago por cliente:
+   - Requiere historial de pagos con fecha real de recaudo desde Siigo, no solo cartera abierta.
 
-3. Fecha real de creación/apertura del cliente:
-   - Requiere campo desde Siigo o base maestra de terceros. Actualmente se muestra registro en plataforma.
+3. Promedio de compras por cliente:
+   - Requiere ventas/facturación histórica acumulada por cliente, fuera del alcance del archivo de cartera abierta.
 
-4. Dirección de entrega:
-   - Requiere que el archivo o integración incluya dirección de entrega separada de dirección comercial.
+4. Fecha real de creación/apertura del cliente:
+   - Requiere campo de fecha de alta en `BASE DE DATOS TERCEROS.xlsx` o integración directa con Siigo.
+   - Actualmente la ficha muestra "Registro plataforma" como referencia secundaria.
 
-5. Tendencia semanal de cartera vencida:
-   - Requiere guardar snapshots semanales automáticos. Recomendación: programar snapshot cada domingo y graficar últimas 8 semanas con meta 8%.
-
-6. Clientes en deterioro esta semana:
-   - Depende de los snapshots semanales para comparar rango anterior vs rango actual.
-
-7. Promesas cumplidas automático:
-   - Ya se puede registrar promesa desde la ficha.
-   - Para marcar Cumplida/Incumplida automáticamente falta cruzar pagos de Siigo contra fecha y monto de promesa.
-
-8. Gestión cobro automática por auxiliar:
-   - Ya existe registro manual de gestión.
-   - Para KPI completo falta asignación diaria por auxiliar y reglas de cobertura.
+5. Dirección de entrega:
+   - Requiere que el archivo de Siigo o la base de terceros incluya dirección de entrega separada de la dirección comercial.
+   - Por ahora solo se muestra la dirección comercial cuando existe.
 
 ## Reglas para bot de cobranza
 

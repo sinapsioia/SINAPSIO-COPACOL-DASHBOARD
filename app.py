@@ -314,6 +314,236 @@ def merge_by_key(base_rows: list[dict], overlay_rows: list[dict], key_fn) -> lis
     return list(merged.values())
 
 
+def parse_iso_datetime(value) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text[:19])
+        except ValueError:
+            return None
+
+
+def parse_iso_date(value) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()[:10]
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def build_weekly_trend(import_batches: list[dict], take: int = 8) -> list[dict]:
+    if not import_batches:
+        return []
+    ordered = sorted(
+        import_batches,
+        key=lambda batch: str(batch.get("fecha_corte") or batch.get("imported_at") or ""),
+    )
+    trend = []
+    for batch in ordered[-take:]:
+        total_saldo = money(batch.get("saldo_total"))
+        total_vencido = money(batch.get("total_vencido"))
+        total_vigente = money(batch.get("total_vigente"))
+        pct = total_vencido / total_saldo if total_saldo else 0.0
+        trend.append({
+            "fecha_corte": batch.get("fecha_corte") or (batch.get("imported_at") or "")[:10],
+            "imported_at": batch.get("imported_at"),
+            "total_saldo": total_saldo,
+            "total_vencido": total_vencido,
+            "total_vigente": total_vigente,
+            "pct_vencido": pct,
+            "facturas": int(money(batch.get("facturas"))),
+            "clientes": int(money(batch.get("clientes"))),
+            "batch_id": batch.get("id"),
+        })
+    return trend
+
+
+def build_clientes_deterioro(current_clients: list[dict], prior_batch_id: str | None) -> list[dict]:
+    if not prior_batch_id:
+        return []
+    try:
+        prior_rows = supabase_get(
+            "copacol_clients",
+            f"select=nit,razon_social,total_vencido,total_saldo,dias_mora_max&import_batch_id=eq.{prior_batch_id}&limit=5000",
+        )
+    except Exception:
+        return []
+    prior_lookup = {row.get("nit"): row for row in prior_rows if row.get("nit")}
+    if not prior_lookup:
+        return []
+    deterioro: list[dict] = []
+    for client in current_clients:
+        nit = client.get("nit")
+        if not nit:
+            continue
+        prior = prior_lookup.get(nit)
+        if not prior:
+            continue
+        delta_vencido = money(client.get("total_vencido")) - money(prior.get("total_vencido"))
+        delta_dias = money(client.get("dias_mora_max")) - money(prior.get("dias_mora_max"))
+        if delta_vencido <= 0 and delta_dias <= 0:
+            continue
+        deterioro.append({
+            "nit": nit,
+            "razon_social": client.get("razon_social") or "Sin nombre",
+            "asesor_nombre": client.get("asesor_nombre"),
+            "vencido_anterior": money(prior.get("total_vencido")),
+            "vencido_actual": money(client.get("total_vencido")),
+            "delta_vencido": delta_vencido,
+            "dias_mora_anterior": money(prior.get("dias_mora_max")),
+            "dias_mora_actual": money(client.get("dias_mora_max")),
+            "delta_dias": delta_dias,
+        })
+    deterioro.sort(key=lambda row: row["delta_vencido"], reverse=True)
+    return deterioro[:20]
+
+
+def build_promesas_resumen(promises: list[dict], payments: list[dict]) -> dict:
+    if not promises:
+        return {
+            "total": 0,
+            "cumplidas": 0,
+            "incumplidas": 0,
+            "pendientes": 0,
+            "pct_cumplidas": 0.0,
+            "ultimas": [],
+        }
+    today = datetime.now().date()
+    payments_by_nit: dict[str, list[dict]] = defaultdict(list)
+    for payment in payments:
+        nit = payment.get("nit")
+        if nit:
+            payments_by_nit[nit].append(payment)
+
+    cumplidas = 0
+    incumplidas = 0
+    pendientes = 0
+    detalle: list[dict] = []
+    for promise in promises:
+        nit = promise.get("nit")
+        monto_prometido = money(promise.get("monto_prometido"))
+        fecha_promesa = parse_iso_date(promise.get("fecha_promesa"))
+        created_at = parse_iso_datetime(promise.get("created_at"))
+        status = (promise.get("status") or "").lower()
+        promise_cumplida = status in {"cumplida", "completed", "paid"}
+        matching_payment = None
+        if not promise_cumplida and nit:
+            for payment in payments_by_nit.get(nit, []):
+                pay_at = (
+                    parse_iso_datetime(payment.get("fecha_verificacion"))
+                    or parse_iso_datetime(payment.get("created_at"))
+                )
+                if not pay_at:
+                    continue
+                if created_at and pay_at < created_at:
+                    continue
+                monto_reportado = money(payment.get("monto_reportado"))
+                if monto_prometido and monto_reportado < monto_prometido * 0.85:
+                    continue
+                matching_payment = payment
+                break
+        if matching_payment or promise_cumplida:
+            cumplidas += 1
+            estado = "cumplida"
+        elif status in {"incumplida", "failed"}:
+            incumplidas += 1
+            estado = "incumplida"
+        elif fecha_promesa and fecha_promesa.date() < today:
+            incumplidas += 1
+            estado = "incumplida"
+        else:
+            pendientes += 1
+            estado = "pendiente"
+        detalle.append({
+            "nit": nit,
+            "fecha_promesa": promise.get("fecha_promesa"),
+            "monto_prometido": monto_prometido,
+            "estado": estado,
+            "registrado_por": promise.get("registrado_por"),
+            "created_at": promise.get("created_at"),
+        })
+    total = cumplidas + incumplidas + pendientes
+    resueltas = cumplidas + incumplidas
+    pct = cumplidas / resueltas if resueltas else 0.0
+    detalle.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+    return {
+        "total": total,
+        "cumplidas": cumplidas,
+        "incumplidas": incumplidas,
+        "pendientes": pendientes,
+        "pct_cumplidas": pct,
+        "ultimas": detalle[:10],
+    }
+
+
+def build_gestion_cobertura(overdue_clients: list[dict], log_contactos: list[dict]) -> dict:
+    overdue_nits = {client.get("nit") for client in overdue_clients if client.get("nit")}
+    total_vencidos = len(overdue_nits)
+    if not log_contactos and not total_vencidos:
+        return {
+            "total_clientes_vencidos": 0,
+            "contactados_hoy": 0,
+            "contactados_semana": 0,
+            "pct_cobertura_hoy": 0.0,
+            "pct_cobertura_semana": 0.0,
+            "top_auxiliares": [],
+        }
+    now = datetime.now()
+    today_start = datetime(now.year, now.month, now.day)
+    week_start = today_start - timedelta(days=7)
+    nits_today: set[str] = set()
+    nits_week: set[str] = set()
+    auxiliar_stats: dict[str, dict] = defaultdict(lambda: {"contactos_hoy": 0, "contactos_semana": 0, "clientes_semana": set()})
+    for log in log_contactos:
+        created = parse_iso_datetime(log.get("created_at"))
+        if not created:
+            continue
+        nit = log.get("nit")
+        registrado_por = log.get("registrado_por") or "sin asignar"
+        if created >= week_start:
+            if nit:
+                nits_week.add(nit)
+                auxiliar_stats[registrado_por]["clientes_semana"].add(nit)
+            auxiliar_stats[registrado_por]["contactos_semana"] += 1
+            if created >= today_start:
+                if nit:
+                    nits_today.add(nit)
+                auxiliar_stats[registrado_por]["contactos_hoy"] += 1
+    contactados_hoy = len(nits_today & overdue_nits) if overdue_nits else len(nits_today)
+    contactados_semana = len(nits_week & overdue_nits) if overdue_nits else len(nits_week)
+    pct_hoy = contactados_hoy / total_vencidos if total_vencidos else 0.0
+    pct_semana = contactados_semana / total_vencidos if total_vencidos else 0.0
+    top_auxiliares = sorted(
+        (
+            {
+                "nombre": nombre,
+                "contactos_hoy": stats["contactos_hoy"],
+                "contactos_semana": stats["contactos_semana"],
+                "clientes_semana": len(stats["clientes_semana"]),
+            }
+            for nombre, stats in auxiliar_stats.items()
+        ),
+        key=lambda row: (row["contactos_semana"], row["contactos_hoy"]),
+        reverse=True,
+    )[:8]
+    return {
+        "total_clientes_vencidos": total_vencidos,
+        "contactados_hoy": contactados_hoy,
+        "contactados_semana": contactados_semana,
+        "pct_cobertura_hoy": pct_hoy,
+        "pct_cobertura_semana": pct_semana,
+        "top_auxiliares": top_auxiliares,
+    }
+
+
 def build_dashboard_payload() -> dict:
     import_batches = []
     try:
@@ -348,6 +578,14 @@ def build_dashboard_payload() -> dict:
         "nit,telefono,metodo,monto_reportado,status,verificado_por,fecha_verificacion,created_at",
         "created_at.desc",
     )
+    log_contactos: list[dict] = []
+    try:
+        log_contactos = supabase_get(
+            "copacol_log_contactos",
+            "select=nit,tipo,resultado,registrado_por,created_at&order=created_at.desc&limit=2000",
+        )
+    except Exception:
+        log_contactos = []
     credit_terms = []
     try:
         credit_terms = fetch_all(
@@ -673,6 +911,13 @@ def build_dashboard_payload() -> dict:
     status_overdue = "green" if (total_vencido / total_saldo if total_saldo else 0) <= 0.08 else "yellow" if (total_vencido / total_saldo if total_saldo else 0) <= 0.15 else "red"
     status_over90 = "green" if (over_90 / total_saldo if total_saldo else 0) < 0.03 else "red"
 
+    weekly_trend = build_weekly_trend(import_batches)
+    prior_batch_id = import_batches[1].get("id") if len(import_batches) > 1 else None
+    clientes_deterioro = build_clientes_deterioro(enriched_clients, prior_batch_id)
+    promesas_resumen = build_promesas_resumen(promises, payments)
+    overdue_clients_list = [client for client in enriched_clients if money(client.get("total_vencido")) > 0]
+    gestion_cobertura = build_gestion_cobertura(overdue_clients_list, log_contactos)
+
     return {
         "summary": {
             "total_saldo": total_saldo,
@@ -695,6 +940,10 @@ def build_dashboard_payload() -> dict:
             "semaforo_90": status_over90,
             "promesas_pendientes": sum(1 for p in promises if (p.get("status") or "").lower() in {"pendiente", "open", ""}),
             "pagos_pendientes": sum(1 for p in payments if (p.get("status") or "").lower() in {"pendiente", "reported", ""}),
+            "pct_promesas_cumplidas": promesas_resumen["pct_cumplidas"],
+            "pct_gestion_cobertura_semana": gestion_cobertura["pct_cobertura_semana"],
+            "pct_gestion_cobertura_hoy": gestion_cobertura["pct_cobertura_hoy"],
+            "clientes_deterioro": len(clientes_deterioro),
             "fecha_corte": latest_cut,
             "ultima_actualizacion": ultima_actualizacion,
             "snapshot_activo": using_active_batch or using_active_cut,
@@ -713,6 +962,10 @@ def build_dashboard_payload() -> dict:
         "due_soon": due_soon[:150],
         "promises": promises[:50],
         "payments": payments[:50],
+        "weekly_trend": weekly_trend,
+        "clientes_deterioro": clientes_deterioro,
+        "promesas_resumen": promesas_resumen,
+        "gestion_cobertura": gestion_cobertura,
     }
 
 
