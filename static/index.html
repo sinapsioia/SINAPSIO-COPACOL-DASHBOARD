@@ -137,6 +137,19 @@
             <div id="riskPill" class="risk-pill">Calculando riesgo</div>
           </div>
 
+          <div id="semaforoPanel" class="semaforo-panel">
+            <div>
+              <span class="eyebrow">Semáforo cartera vencida</span>
+              <strong id="semaforoStatus">-</strong>
+              <small id="semaforoDetail">Verde ≤ 8% · Amarillo 8-15% · Rojo &gt; 15%</small>
+            </div>
+            <div class="semaforo-lights" aria-label="Semáforo operativo">
+              <i data-light="green"></i>
+              <i data-light="yellow"></i>
+              <i data-light="red"></i>
+            </div>
+          </div>
+
           <div class="executive-grid">
             <article class="metric-card">
               <span>Cartera general</span>
@@ -173,6 +186,11 @@
               <span>Contado</span>
               <strong id="kpiContado">-</strong>
               <small id="kpiContadoPct">-</small>
+            </article>
+            <article class="metric-card">
+              <span>Rotación cartera</span>
+              <strong id="kpiRotation">-</strong>
+              <small id="kpiRotationDetail">DSO requiere ventas del mes</small>
             </article>
           </div>
 
@@ -410,11 +428,13 @@
               <h2>Cartera detallada</h2>
               <span id="invoiceCount" class="muted">-</span>
             </div>
-            <div class="segmented">
-              <button class="segment active" data-mode="all">Todas</button>
-              <button class="segment" data-mode="overdue">Vencidas</button>
-              <button class="segment" data-mode="soon">Próximas</button>
-              <button id="downloadInvoicesBtn" type="button">Descargar Excel</button>
+            <div class="table-actions">
+              <div class="segmented">
+                <button class="segment active" data-mode="all">Todas</button>
+                <button class="segment" data-mode="overdue">Vencidas</button>
+                <button class="segment" data-mode="soon">Próximas</button>
+              </div>
+              <button id="downloadInvoicesBtn" type="button" class="download-btn">Descargar Excel</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -449,13 +469,31 @@
         </section>
 
         <section id="carga" class="panel import-panel page" data-page="carga">
-          <div>
+          <div class="import-intro">
             <p class="eyebrow">Actualización de datos</p>
             <h2>Cargar nuevo Excel de Siigo</h2>
             <p class="muted">
               Primero valida estructura, corte, totales, clientes y vendedores.
               La importación definitiva queda protegida para evitar reemplazos accidentales.
             </p>
+            <div class="upload-rules">
+              <article>
+                <strong>1. Cuentas incluidas</strong>
+                <span>Solo cartera de clientes: 13050501 y 13050522.</span>
+              </article>
+              <article>
+                <strong>2. Reemplazo completo</strong>
+                <span>La plantilla confirmada queda como cartera activa y conserva historial.</span>
+              </article>
+              <article>
+                <strong>3. Plazos reales</strong>
+                <span>Se cruza con la base de terceros para 45, 60, contado y Platam.</span>
+              </article>
+              <article>
+                <strong>4. Validación previa</strong>
+                <span>Antes de confirmar verás corte, saldos, clientes, vendedores y cambios.</span>
+              </article>
+            </div>
           </div>
           <form id="importForm" class="import-box">
             <input id="xlsxFile" name="file" type="file" accept=".xlsx" />

@@ -138,6 +138,12 @@ function conditionLabel(key) {
   return (conditionLabels[key] || [key || "Sin condición"])[0];
 }
 
+function semaforoMeta(ratio) {
+  if (ratio <= 0.08) return { key: "green", label: "Verde", copy: "Cartera dentro de meta operativa" };
+  if (ratio <= 0.15) return { key: "yellow", label: "Amarillo", copy: "Seguimiento diario requerido" };
+  return { key: "red", label: "Rojo", copy: "Priorizar cartera vencida hoy" };
+}
+
 function advisorInvoices(code) {
   return dashboard.invoices.filter((invoice) => invoice.asesor_codigo === code);
 }
@@ -259,12 +265,14 @@ function buildView() {
   let totalVigente = 0;
   let facturasVencidas = 0;
   let moraSum = 0;
+  let weightedDays = 0;
 
   invoices.forEach((invoice) => {
     const rawValue = amount(invoice.monto);
     const value = Math.max(rawValue, 0);
     const days = amount(invoice.dias_mora);
     aging[invoice.aging_bucket] += value;
+    weightedDays += Math.max(days, 0) * value;
     const conditionKey = rawValue < 0 ? "saldos_a_favor" : (invoice.condicion_pago_real || invoice.condicion_pago || "sin_condicion_real");
     conditionMap[conditionKey] = (conditionMap[conditionKey] || 0) + rawValue;
     if (days > 0) {
@@ -310,6 +318,7 @@ function buildView() {
       facturas: invoices.length,
       facturas_vencidas: facturasVencidas,
       mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
+      rotacion_cartera_dias: totalSaldo ? weightedDays / totalSaldo : 0,
       concentracion_top10: clients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
       concentracion_top10_pct: totalSaldo ? clients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
       over_90: aging["91_120"] + aging["121_180"] + aging["181_plus"],
@@ -399,6 +408,15 @@ function renderDashboard() {
   const riskText = overdueRatio <= 0.08 ? "Verde: cartera controlada" : overdueRatio <= 0.15 ? "Amarillo: seguimiento diario" : "Rojo: priorizar vencidos";
   $("riskPill").className = `risk-pill ${riskClass}`;
   setText("riskPill", riskText);
+  const semaforo = semaforoMeta(overdueRatio);
+  $("semaforoPanel").className = `semaforo-panel ${semaforo.key}`;
+  setText("semaforoStatus", `${semaforo.label} · ${pct.format(overdueRatio)}`);
+  setText("semaforoDetail", `${semaforo.copy}. Meta verde hasta 8%.`);
+  document.querySelectorAll(".semaforo-lights i").forEach((light) => {
+    light.classList.toggle("active", light.dataset.light === semaforo.key);
+  });
+  setText("kpiRotation", `${number.format(Math.round(summary.rotacion_cartera_dias || 0))} días`);
+  setText("kpiRotationDetail", "Promedio ponderado sobre toda la cartera");
   $("donut").style.setProperty("--pct", `${Math.min(100, overdueRatio * 100)}%`);
   $("overdueProgress").style.width = `${Math.min(100, overdueRatio * 100)}%`;
 
@@ -1019,6 +1037,7 @@ function renderImportPreview(result) {
       <article><span>Clientes</span><strong>${number.format(result.clientes || 0)}</strong></article>
       <article><span>Vendedores</span><strong>${number.format(result.vendedores || 0)}</strong></article>
       <article><span>Plazo real</span><strong>${number.format(realTermInvoices)} docs</strong><small>${number.format(fallbackInvoices)} fallback</small></article>
+      <article><span>Cuentas Siigo</span><strong>13050501 / 13050522</strong><small>Únicas cuentas consideradas</small></article>
     </div>
     ${changeControl}
     <div class="import-preview-grid">

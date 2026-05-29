@@ -73,6 +73,21 @@ AGING_KEYS = [
 ]
 OVERDUE_AGING_KEYS = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"]
 ALLOWED_SIIGO_ACCOUNT_PREFIXES = ("13050501", "13050522")
+CITY_LABELS = {
+    "154": "Cali",
+    "813": "Tumaco",
+    "122": "Buenaventura",
+    "300": "El Charco",
+    "448": "Jamundí",
+    "1111": "Yumbo",
+    "702": "Popayán",
+    "162": "Candelaria",
+    "658": "Palmira",
+    "572": "Puerto Tejada",
+    "393": "Guacarí",
+    "379": "Ginebra",
+    "115": "Buga",
+}
 
 
 def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | list) -> None:
@@ -279,6 +294,13 @@ def allowed_siigo_account(value: str) -> bool:
     return digits.startswith(ALLOWED_SIIGO_ACCOUNT_PREFIXES)
 
 
+def city_label(value: str | None) -> str:
+    code = str(value or "").strip()
+    if not code:
+        return "Sin ciudad"
+    return CITY_LABELS.get(code, code)
+
+
 def row_stamp(row: dict) -> str:
     return str(row.get("updated_at") or row.get("created_at") or "")
 
@@ -431,7 +453,7 @@ def build_dashboard_payload() -> dict:
         seller["saldo"] += money(client.get("total_saldo"))
         seller["vencido"] += money(client.get("total_vencido"))
         seller["clientes"] += 1
-        by_city[client.get("ciudad") or "Sin ciudad"] += money(client.get("total_saldo"))
+        by_city[city_label(client.get("ciudad"))] += money(client.get("total_saldo"))
 
     for invoice in invoices:
         client = client_lookup.get(invoice.get("nit"), {})
@@ -454,7 +476,7 @@ def build_dashboard_payload() -> dict:
                     "cliente": client.get("razon_social") or "Sin cliente",
                     "asesor_codigo": client.get("asesor_codigo") or "sin_codigo",
                     "asesor_nombre": client.get("asesor_nombre") or "Sin asesor",
-                    "ciudad": client.get("ciudad") or "Sin ciudad",
+                    "ciudad": city_label(client.get("ciudad")),
                     "telefono": client.get("telefono") or client.get("telefono_2") or "",
                     "aging_bucket": aging_bucket(days),
                     "condicion_pago_real": condition_key,
@@ -513,7 +535,7 @@ def build_dashboard_payload() -> dict:
                 "cliente": client.get("razon_social") or "Sin cliente",
                 "asesor_codigo": seller_code,
                 "asesor_nombre": seller_name,
-                "ciudad": client.get("ciudad") or "Sin ciudad",
+                "ciudad": city_label(client.get("ciudad")),
                 "telefono": client.get("telefono") or client.get("telefono_2") or "",
                 "aging_bucket": bucket,
                 "condicion_pago_real": condition_key,
@@ -586,6 +608,11 @@ def build_dashboard_payload() -> dict:
     overdue_days = [money(row.get("dias_mora")) for row in enriched_invoices if money(row.get("dias_mora")) > 0]
     if overdue_days:
         avg_mora_vencida = sum(overdue_days) / len(overdue_days)
+    weighted_days_total = sum(
+        max(money(row.get("dias_mora")), 0.0) * max(money(row.get("monto")), 0.0)
+        for row in enriched_invoices
+    )
+    rotacion_cartera_dias = weighted_days_total / total_saldo if total_saldo else 0.0
 
     enriched_clients = []
     for client in clients:
@@ -659,6 +686,7 @@ def build_dashboard_payload() -> dict:
             "facturas": len(invoices),
             "facturas_vencidas": len(overdue_invoices),
             "mora_promedio": avg_mora_vencida,
+            "rotacion_cartera_dias": rotacion_cartera_dias,
             "concentracion_top10": concentration_top10,
             "concentracion_top10_pct": concentration_top10 / total_saldo if total_saldo else 0,
             "over_90": over_90,
@@ -1255,7 +1283,7 @@ def parse_xlsx(path: Path) -> dict:
                 "facturas": row.get("num_facturas") or 0,
                 "vencidas": row.get("num_vencidas") or 0,
                 "dias_mora_max": row.get("dias_mora_max") or 0,
-                "ciudad": row.get("ciudad") or "",
+                "ciudad": city_label(row.get("ciudad")),
                 "asesor_codigo": row.get("asesor_codigo") or "",
                 "asesor_nombre": row.get("asesor_nombre") or "",
                 "telefono_1": row.get("telefono") or "",
@@ -1420,7 +1448,7 @@ def parse_xlsx(path: Path) -> dict:
         client_name = safe_cell(raw, cols["cliente_nombre"]) or "Sin nombre"
 
         record = {
-            "ciudad": safe_cell(raw, cols["ciudad"]),
+            "ciudad": city_label(safe_cell(raw, cols["ciudad"])),
             "vendedor_codigo": seller_code,
             "vendedor_nombre": seller_name,
             "cliente_nit": nit,

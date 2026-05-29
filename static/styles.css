@@ -391,11 +391,49 @@ input[type="number"] {
   box-shadow: var(--shadow-1);
 }
 .board-header,
+.semaforo-panel,
 .executive-grid,
 .board-grid,
 .goal-strip { display: grid; gap: 14px; }
 .board-header { grid-template-columns: minmax(0,1fr) auto; align-items: center; }
-.executive-grid { grid-template-columns: repeat(7, minmax(140px,1fr)); }
+.executive-grid { grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); }
+
+.semaforo-panel {
+  grid-template-columns: minmax(0,1fr) auto;
+  align-items: center;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.semaforo-panel strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+}
+.semaforo-panel small { color: var(--ink-3); }
+.semaforo-panel.green { border-color: #86efac; background: linear-gradient(145deg,#fff,var(--success-soft)); }
+.semaforo-panel.yellow { border-color: #fcd34d; background: linear-gradient(145deg,#fff,var(--warning-soft)); }
+.semaforo-panel.red { border-color: #fca5a5; background: linear-gradient(145deg,#fff,var(--danger-soft)); }
+.semaforo-lights {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.semaforo-lights i {
+  width: 18px; height: 18px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  opacity: .45;
+}
+.semaforo-lights i[data-light="green"].active { background: var(--success); opacity: 1; }
+.semaforo-lights i[data-light="yellow"].active { background: var(--warning); opacity: 1; }
+.semaforo-lights i[data-light="red"].active { background: var(--danger); opacity: 1; }
 
 .metric-card {
   min-height: 124px;
@@ -794,7 +832,7 @@ tbody tr:hover td { background: var(--surface-2); }
 .client-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .client-actions a, .client-actions span, .client-actions button {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 100%; min-width: 0; height: 32px; padding: 0 10px;
+  width: 100%; min-width: 68px; height: 34px; padding: 0 10px;
   border-radius: var(--radius-sm);
   background: var(--surface-2); color: var(--brand-500);
   text-decoration: none; font-size: 12px; font-weight: 600;
@@ -804,6 +842,27 @@ tbody tr:hover td { background: var(--surface-2); }
 .client-actions button:disabled, .drawer-action-btn:disabled { opacity: .65; cursor: wait; }
 .client-actions .bot-disabled { background: var(--accent-50); color: var(--accent); border-color: var(--accent-soft); }
 
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.download-btn,
+#noGestion5dBtn {
+  background: var(--brand-500);
+  color: white;
+  border: 1px solid var(--brand-500);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-weight: 700;
+}
+#noGestion5dBtn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ============================================
    IMPORT PANEL
    ============================================ */
@@ -812,6 +871,24 @@ tbody tr:hover td { background: var(--surface-2); }
   grid-template-columns: minmax(240px,.8fr) minmax(320px,1fr);
   gap: 18px; align-items: start;
 }
+.import-intro { display: grid; gap: 14px; }
+.upload-rules {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+.upload-rules article {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.upload-rules strong,
+.upload-rules span {
+  display: block;
+}
+.upload-rules strong { color: var(--ink-1); font-size: 13px; }
+.upload-rules span { color: var(--ink-3); font-size: 12px; margin-top: 3px; }
 .import-box { display: grid; gap: 12px; }
 input[type="file"] {
   border: 1px dashed var(--border-2); border-radius: var(--radius-sm);
@@ -865,7 +942,7 @@ input[type="file"] {
 }
 .import-kpis {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   border-bottom: 1px solid var(--border);
 }
 .import-kpis article {
