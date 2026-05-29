@@ -825,6 +825,50 @@ button.rank-row:hover { background: var(--surface-2); }
 .gestion-track i { display: block; height: 100%; background: var(--brand-500); border-radius: 999px; }
 .gestion-row b { text-align: right; font-weight: 700; }
 
+.promesas-kpi-strip {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 10px;
+  margin: 14px 0;
+}
+.promesas-kpi-strip article {
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.promesas-kpi-strip article.ok       { border-color: rgba(34,197,94,0.4); background: var(--success-soft); }
+.promesas-kpi-strip article.warn     { border-color: rgba(245,158,11,0.4); background: var(--warning-soft); }
+.promesas-kpi-strip article.critical { border-color: rgba(239,68,68,0.4); background: var(--danger-soft); }
+.promesas-kpi-strip article.brand    { border-color: var(--brand-300); background: var(--accent-50); }
+.promesas-kpi-strip span { display: block; color: var(--ink-3); font-size: 12px; }
+.promesas-kpi-strip strong { display: block; font-family: var(--font-display); font-size: 22px; font-weight: 600; }
+
+.row-actions {
+  display: inline-flex; gap: 4px;
+}
+.row-actions button {
+  width: 30px; height: 30px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 13px;
+}
+.row-actions button:hover { background: var(--surface-2); }
+.row-actions .row-danger { color: var(--danger); border-color: rgba(239,68,68,0.3); }
+.link-cell {
+  background: none; border: none; color: var(--brand-500);
+  cursor: pointer; text-align: left; padding: 0; font: inherit; font-weight: 600;
+}
+.link-cell:hover { text-decoration: underline; }
+
+.asesor-new-grid {
+  display: grid; grid-template-columns: 120px 1fr; gap: 8px;
+}
+.asesor-actual {
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: center;
+  margin-top: 4px;
+}
+.asesor-actual span { color: var(--ink-3); font-size: 12px; }
+
 /* ============================================
    SEGMENTED
    ============================================ */

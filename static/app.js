@@ -1239,6 +1239,7 @@ function showPage(page) {
     clientes: "Clientes",
     carga: "Carga de Datos",
     historial: "Historial de Plantillas",
+    compromisos: "Compromisos de Pago",
   };
   setText("pageTitle", labels[page] || "Dashboard de Cobranzas");
   document.querySelectorAll("[data-page]").forEach((section) => {
@@ -1248,7 +1249,325 @@ function showPage(page) {
     link.classList.toggle("active", link.dataset.pageLink === page);
   });
   if (page === "historial" && !importHistory.length) loadImportHistory();
+  if (page === "compromisos") loadPromesas();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ── Compromisos de pago ───────────────────────────────────────────────────────
+
+let promesasData = { summary: {}, promises: [], clientes: [] };
+let promesaFilter = "all";
+
+const promesaEstadoLabel = {
+  pendiente: ["Pendiente", "warn"],
+  cumplida: ["Cumplida", "ok"],
+  incumplida: ["Incumplida", "critical"],
+};
+
+async function loadPromesas() {
+  const tbody = $("promesasTable");
+  if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="muted">Cargando compromisos…</td></tr>';
+  try {
+    const res = await fetch(`/api/promesas?status=${encodeURIComponent(promesaFilter)}`, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudieron cargar compromisos");
+    promesasData = data;
+    renderPromesas();
+    populatePromesaClienteList();
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="muted">Error: ${escapeHtml(err.message)}</td></tr>`;
+    setText("promesasCount", "No se pudieron cargar compromisos");
+  }
+}
+
+function renderPromesas() {
+  const summary = promesasData.summary || {};
+  setText(
+    "promesasCount",
+    summary.total
+      ? `${number.format(summary.total)} compromisos registrados`
+      : "Aún no hay compromisos registrados",
+  );
+  const strip = $("promesasSummary");
+  if (strip) {
+    strip.innerHTML = `
+      <article><span>Total</span><strong>${number.format(summary.total || 0)}</strong></article>
+      <article class="ok"><span>Cumplidas</span><strong>${number.format(summary.cumplidas || 0)}</strong></article>
+      <article class="warn"><span>Pendientes</span><strong>${number.format(summary.pendientes || 0)}</strong></article>
+      <article class="critical"><span>Incumplidas</span><strong>${number.format(summary.incumplidas || 0)}</strong></article>
+      <article class="brand"><span>% cumplidas</span><strong>${pct.format(amount(summary.pct_cumplidas))}</strong></article>
+    `;
+  }
+  const tbody = $("promesasTable");
+  if (!tbody) return;
+  const rows = promesasData.promises || [];
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="muted">No hay compromisos con el filtro seleccionado.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const estado = (row.estado_calculado || "pendiente").toLowerCase();
+    const [label, cls] = promesaEstadoLabel[estado] || ["Pendiente", "warn"];
+    const monto = money.format(amount(row.monto_prometido));
+    const observ = row.observacion ? escapeHtml(row.observacion) : '<span class="muted">—</span>';
+    return `
+      <tr data-promesa-id="${escapeHtml(row.id || "")}" data-nit="${escapeHtml(row.nit || "")}">
+        <td>
+          <button class="link-cell" data-action="open-client">${escapeHtml(row.cliente || "Cliente")}</button>
+        </td>
+        <td>${escapeHtml(row.nit || "-")}</td>
+        <td>${escapeHtml(row.fecha_promesa || "-")}</td>
+        <td>${monto}</td>
+        <td><span class="status ${cls}">${label}</span></td>
+        <td>${escapeHtml(row.asesor_nombre || "Sin asesor")}</td>
+        <td>${escapeHtml(row.registrado_por || "—")}</td>
+        <td>${observ}</td>
+        <td>
+          <div class="row-actions">
+            ${estado !== "cumplida" ? '<button data-action="cumplir" title="Marcar cumplida">✓</button>' : ""}
+            ${estado !== "incumplida" ? '<button data-action="incumplir" title="Marcar incumplida">✗</button>' : ""}
+            <button data-action="editar" title="Editar">✎</button>
+            <button data-action="eliminar" class="row-danger" title="Eliminar">🗑</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
+  tbody.querySelectorAll("tr").forEach((tr) => {
+    tr.querySelectorAll("button[data-action]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const action = btn.dataset.action;
+        const id = tr.dataset.promesaId;
+        const nit = tr.dataset.nit;
+        if (action === "open-client" && nit) {
+          openClientDrawer(nit);
+        } else if (action === "cumplir") {
+          patchPromesa(id, { status: "cumplida" });
+        } else if (action === "incumplir") {
+          patchPromesa(id, { status: "incumplida" });
+        } else if (action === "editar") {
+          openPromesaModal(promesasData.promises.find((row) => row.id === id) || null);
+        } else if (action === "eliminar") {
+          deletePromesaRow(id);
+        }
+      });
+    });
+  });
+}
+
+function populatePromesaClienteList() {
+  const datalist = $("promesaClienteList");
+  if (!datalist) return;
+  const items = (promesasData.clientes || []).slice(0, 800);
+  datalist.innerHTML = items.map((client) => `
+    <option value="${escapeHtml(client.razon_social || client.nit || "")}" data-nit="${escapeHtml(client.nit || "")}">
+      ${escapeHtml(client.nit || "")} · ${escapeHtml(client.asesor_nombre || "Sin asesor")}
+    </option>
+  `).join("");
+}
+
+async function patchPromesa(id, payload) {
+  try {
+    const res = await fetch(`/api/promesas/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo actualizar el compromiso");
+    await loadPromesas();
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+async function deletePromesaRow(id) {
+  if (!id) return;
+  if (!confirm("¿Eliminar este compromiso? No se puede recuperar.")) return;
+  try {
+    const res = await fetch(`/api/promesas/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudo eliminar");
+    await loadPromesas();
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+function openPromesaModal(promesa = null, prefillNit = null) {
+  populatePromesaClienteList();
+  const editing = Boolean(promesa);
+  setText("promesaModalTitle", editing ? "Editar compromiso" : "Nueva promesa");
+  $("promesaId").value = editing ? (promesa.id || "") : "";
+  const targetNit = prefillNit || (promesa && promesa.nit) || "";
+  if (targetNit) {
+    const client = (promesasData.clientes || []).find((c) => c.nit === targetNit);
+    $("promesaCliente").value = client ? (client.razon_social || targetNit) : targetNit;
+    $("promesaNit").value = targetNit;
+    if (client) {
+      setText("promesaClienteHint", `${client.razon_social || "Cliente"} · NIT ${client.nit}`);
+    }
+  } else {
+    $("promesaCliente").value = "";
+    $("promesaNit").value = "";
+    setText("promesaClienteHint", "Selecciona un cliente del listado.");
+  }
+  $("promesaFecha").value = (promesa && promesa.fecha_promesa) || new Date().toISOString().slice(0, 10);
+  $("promesaMonto").value = promesa ? Math.round(amount(promesa.monto_prometido)) : "";
+  $("promesaObs").value = (promesa && promesa.observacion) || "";
+  $("promesaStatusGroup").style.display = editing ? "" : "none";
+  if (editing) $("promesaStatus").value = (promesa.status || "pendiente").toLowerCase();
+  $("promesaModal").showModal();
+  setTimeout(() => $("promesaCliente").focus(), 50);
+}
+
+function resolvePromesaNit() {
+  const explicit = $("promesaNit").value.trim();
+  if (explicit) return explicit;
+  const value = $("promesaCliente").value.trim();
+  if (!value) return "";
+  const direct = (promesasData.clientes || []).find(
+    (client) => (client.razon_social || "").toLowerCase() === value.toLowerCase() || client.nit === value,
+  );
+  return direct ? direct.nit : value;
+}
+
+async function savePromesaForm() {
+  const id = $("promesaId").value.trim();
+  const nit = resolvePromesaNit();
+  const payload = {
+    nit,
+    fecha_promesa: $("promesaFecha").value,
+    monto_prometido: Number($("promesaMonto").value || 0),
+    observacion: $("promesaObs").value.trim(),
+    registrado_por: JSON.parse(sessionStorage.getItem("copacol_user") || "{}").email || "dashboard",
+  };
+  if (id) payload.status = $("promesaStatus").value;
+  try {
+    $("savePromesa").disabled = true;
+    const url = id ? `/api/promesas/${encodeURIComponent(id)}` : "/api/promesas";
+    const res = await fetch(url, {
+      method: id ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo guardar");
+    $("promesaModal").close();
+    await loadPromesas();
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $("savePromesa").disabled = false;
+  }
+}
+
+// ── Gestión de asesor por cliente ─────────────────────────────────────────────
+
+let asesoresCatalog = [];
+
+async function loadAsesoresCatalog() {
+  try {
+    const res = await fetch("/api/asesores", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo cargar asesores");
+    asesoresCatalog = data.asesores || [];
+  } catch (err) {
+    console.warn("asesores:", err);
+    asesoresCatalog = [];
+  }
+}
+
+function populateAsesorSelect(current = "") {
+  const select = $("asesorExistente");
+  if (!select) return;
+  select.innerHTML =
+    `<option value="">— Seleccionar de la lista —</option>` +
+    asesoresCatalog
+      .map((row) => {
+        const value = `${row.asesor_codigo || ""}|${row.asesor_nombre || ""}`;
+        const label = `${row.asesor_nombre || "Sin nombre"} (cód ${row.asesor_codigo || "—"}, ${row.clientes} clientes)`;
+        const selected = current && current === row.asesor_codigo ? "selected" : "";
+        return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+}
+
+async function openAsesorModal(nit, clientName, currentCodigo, currentNombre) {
+  if (!asesoresCatalog.length) await loadAsesoresCatalog();
+  $("asesorNit").value = nit;
+  setText("asesorClienteName", clientName || "Cliente");
+  populateAsesorSelect(currentCodigo);
+  $("asesorNuevoCodigo").value = "";
+  $("asesorNuevoNombre").value = "";
+  const block = $("asesorActualBlock");
+  if (currentNombre) {
+    block.style.display = "";
+    setText("asesorActualNombre", `${currentNombre}${currentCodigo ? ` (cód ${currentCodigo})` : ""}`);
+  } else {
+    block.style.display = "none";
+  }
+  $("asesorModal").showModal();
+}
+
+async function saveAsesorForm() {
+  const nit = $("asesorNit").value;
+  const selected = $("asesorExistente").value;
+  const nuevoCodigo = $("asesorNuevoCodigo").value.trim();
+  const nuevoNombre = $("asesorNuevoNombre").value.trim();
+  let payload;
+  if (nuevoCodigo || nuevoNombre) {
+    payload = { asesor_codigo: nuevoCodigo, asesor_nombre: nuevoNombre };
+  } else if (selected) {
+    const [codigo, ...nombreParts] = selected.split("|");
+    payload = { asesor_codigo: codigo, asesor_nombre: nombreParts.join("|") };
+  } else {
+    alert("Selecciona un asesor del listado o ingresa uno nuevo.");
+    return;
+  }
+  try {
+    $("saveAsesor").disabled = true;
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}/asesor`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo actualizar el asesor");
+    $("asesorModal").close();
+    await loadAsesoresCatalog();
+    if (drawerNit === nit) openClientDrawer(nit);
+    loadDashboard().catch((err) => status(err.message));
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $("saveAsesor").disabled = false;
+  }
+}
+
+async function removeAsesorFromClient() {
+  const nit = $("asesorNit").value;
+  if (!nit) return;
+  if (!confirm("¿Quitar el asesor asignado a este cliente?")) return;
+  try {
+    $("removeAsesor").disabled = true;
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}/asesor`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "quitar" }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo quitar el asesor");
+    $("asesorModal").close();
+    await loadAsesoresCatalog();
+    if (drawerNit === nit) openClientDrawer(nit);
+    loadDashboard().catch((err) => status(err.message));
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $("removeAsesor").disabled = false;
+  }
 }
 
 // ── Chat IA ───────────────────────────────────────────────────────────────────
@@ -1388,6 +1707,7 @@ async function initApp() {
     console.error(error);
     status(error.message);
   });
+  loadAsesoresCatalog();
 }
 
 async function handleLogin(event) {
@@ -1477,6 +1797,7 @@ function renderDrawer(payload) {
     <div class="drawer-actions-row">
       <button class="drawer-action-btn" id="registerGestionBtn">+ Registrar gestión</button>
       <button class="drawer-action-btn" id="registerPromesaBtn">+ Registrar promesa</button>
+      <button class="drawer-action-btn" id="changeAsesorBtn">Cambiar asesor</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
       ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
     </div>`;
@@ -1511,10 +1832,14 @@ function renderDrawer(payload) {
   $("drawerBody").innerHTML = kpisHtml + infoHtml + actionsHtml + invoicesHtml + historyHtml;
   $("registerGestionBtn").addEventListener("click", () => openContactModal(client.nit, name));
   $("registerPromesaBtn").addEventListener("click", () => {
-    openContactModal(client.nit, name);
-    $("contactResultado").value = "promesa";
-    $("promesaGroup").style.display = "";
-    $("montoGroup").style.display = "";
+    if (!promesasData.clientes.length) {
+      loadPromesas().then(() => openPromesaModal(null, client.nit));
+    } else {
+      openPromesaModal(null, client.nit);
+    }
+  });
+  $("changeAsesorBtn").addEventListener("click", () => {
+    openAsesorModal(client.nit, name, client.asesor_codigo || "", client.asesor_nombre || "");
   });
   const waBtn = $("triggerWhatsAppBtn");
   if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
@@ -1699,6 +2024,42 @@ $("refreshHistoryBtn").addEventListener("click", loadImportHistory);
 $("closeDrawer").addEventListener("click", closeClientDrawer);
 $("drawerBackdrop").addEventListener("click", closeClientDrawer);
 $("loginForm").addEventListener("submit", handleLogin);
+$("promesaFilter").addEventListener("change", (event) => {
+  promesaFilter = event.target.value || "all";
+  loadPromesas();
+});
+$("newPromesaBtn").addEventListener("click", () => {
+  if (!promesasData.clientes.length) {
+    loadPromesas().then(() => openPromesaModal());
+  } else {
+    openPromesaModal();
+  }
+});
+$("closePromesaModal").addEventListener("click", () => $("promesaModal").close());
+$("cancelPromesa").addEventListener("click", () => $("promesaModal").close());
+$("savePromesa").addEventListener("click", savePromesaForm);
+$("promesaCliente").addEventListener("change", () => {
+  const value = $("promesaCliente").value.trim();
+  const found = (promesasData.clientes || []).find(
+    (client) => (client.razon_social || "").toLowerCase() === value.toLowerCase() || client.nit === value,
+  );
+  if (found) {
+    $("promesaNit").value = found.nit;
+    setText("promesaClienteHint", `${found.razon_social || "Cliente"} · NIT ${found.nit} · ${found.asesor_nombre || "Sin asesor"}`);
+  } else {
+    $("promesaNit").value = "";
+    setText("promesaClienteHint", "Cliente no reconocido — verifica el NIT.");
+  }
+});
+$("closeAsesorModal").addEventListener("click", () => $("asesorModal").close());
+$("saveAsesor").addEventListener("click", saveAsesorForm);
+$("removeAsesor").addEventListener("click", removeAsesorFromClient);
+$("asesorExistente").addEventListener("change", () => {
+  if ($("asesorExistente").value) {
+    $("asesorNuevoCodigo").value = "";
+    $("asesorNuevoNombre").value = "";
+  }
+});
 $("cancelContact").addEventListener("click", () => $("contactModal").close());
 $("closeContactModal").addEventListener("click", () => $("contactModal").close());
 $("saveContact").addEventListener("click", saveContact);

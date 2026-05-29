@@ -1053,6 +1053,229 @@ def supabase_insert(table: str, row: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def supabase_patch(table: str, query: str, row: dict) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query}"
+    body = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="PATCH",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def supabase_delete(table: str, query: str) -> int:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query}"
+    req = urllib.request.Request(
+        url,
+        method="DELETE",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.status
+
+
+def build_promesas_module_payload(status: str | None = None) -> dict:
+    promises = fetch_all(
+        "copacol_promesas_pago",
+        "id,nit,telefono,fecha_promesa,monto_prometido,observacion,status,registrado_por,created_at,updated_at",
+        "fecha_promesa.desc",
+        page_size=500,
+    )
+    payments = fetch_all(
+        "copacol_pagos_reportados",
+        "nit,monto_reportado,status,fecha_verificacion,created_at",
+        "created_at.desc",
+        page_size=500,
+    )
+    clients = fetch_all(
+        "copacol_clients",
+        "nit,razon_social,asesor_codigo,asesor_nombre,telefono,total_saldo,total_vencido,dias_mora_max",
+        "razon_social.asc",
+        page_size=2000,
+    )
+    client_lookup = {client.get("nit"): client for client in clients if client.get("nit")}
+    payments_by_nit: dict[str, list[dict]] = defaultdict(list)
+    for payment in payments:
+        nit = payment.get("nit")
+        if nit:
+            payments_by_nit[nit].append(payment)
+    today = datetime.now().date()
+    enriched: list[dict] = []
+    counters = {"total": 0, "cumplidas": 0, "incumplidas": 0, "pendientes": 0}
+    for promise in promises:
+        client = client_lookup.get(promise.get("nit")) or {}
+        status_raw = (promise.get("status") or "").lower()
+        fecha_promesa = parse_iso_date(promise.get("fecha_promesa"))
+        created_at = parse_iso_datetime(promise.get("created_at"))
+        monto_prometido = money(promise.get("monto_prometido"))
+        matching_payment = None
+        if status_raw not in {"cumplida", "completed", "paid"} and promise.get("nit"):
+            for payment in payments_by_nit.get(promise.get("nit"), []):
+                pay_at = (
+                    parse_iso_datetime(payment.get("fecha_verificacion"))
+                    or parse_iso_datetime(payment.get("created_at"))
+                )
+                if not pay_at:
+                    continue
+                if created_at and pay_at < created_at:
+                    continue
+                monto_reportado = money(payment.get("monto_reportado"))
+                if monto_prometido and monto_reportado < monto_prometido * 0.85:
+                    continue
+                matching_payment = payment
+                break
+        if status_raw in {"cumplida", "completed", "paid"} or matching_payment:
+            estado = "cumplida"
+        elif status_raw in {"incumplida", "failed"}:
+            estado = "incumplida"
+        elif fecha_promesa and fecha_promesa.date() < today:
+            estado = "incumplida"
+        else:
+            estado = "pendiente"
+        counters["total"] += 1
+        counters[estado + "s"] = counters.get(estado + "s", 0) + 1
+        if status and status != "all" and estado != status:
+            continue
+        enriched.append({
+            **promise,
+            "estado_calculado": estado,
+            "monto_prometido": monto_prometido,
+            "cliente": client.get("razon_social") or "Cliente sin nombre",
+            "asesor_nombre": client.get("asesor_nombre") or "Sin asesor",
+            "asesor_codigo": client.get("asesor_codigo") or "",
+            "cliente_telefono": client.get("telefono") or promise.get("telefono") or "",
+            "saldo_cliente": money(client.get("total_saldo")),
+            "vencido_cliente": money(client.get("total_vencido")),
+            "matching_payment": matching_payment,
+        })
+    resueltas = counters.get("cumplidas", 0) + counters.get("incumplidas", 0)
+    pct_cumplidas = counters.get("cumplidas", 0) / resueltas if resueltas else 0.0
+    return {
+        "filter": status or "all",
+        "summary": {
+            "total": counters.get("total", 0),
+            "cumplidas": counters.get("cumplidas", 0),
+            "incumplidas": counters.get("incumplidas", 0),
+            "pendientes": counters.get("pendientes", 0),
+            "pct_cumplidas": pct_cumplidas,
+        },
+        "promises": enriched,
+        "clientes": [
+            {
+                "nit": client.get("nit"),
+                "razon_social": client.get("razon_social"),
+                "asesor_nombre": client.get("asesor_nombre"),
+                "telefono": client.get("telefono"),
+            }
+            for client in sorted(clients, key=lambda c: (c.get("razon_social") or "").upper())
+            if client.get("nit")
+        ],
+    }
+
+
+def upsert_promesa(payload: dict, *, promesa_id: str | None = None) -> dict:
+    nit = (payload.get("nit") or "").strip()
+    fecha = (payload.get("fecha_promesa") or "").strip()
+    monto = money(payload.get("monto_prometido"))
+    if not promesa_id:
+        if not nit:
+            raise ValueError("El NIT del cliente es obligatorio.")
+        if not fecha:
+            raise ValueError("La fecha de compromiso es obligatoria.")
+        if monto <= 0:
+            raise ValueError("El monto prometido debe ser mayor a cero.")
+    row: dict = {}
+    if "nit" in payload and nit:
+        row["nit"] = nit
+    if "fecha_promesa" in payload:
+        row["fecha_promesa"] = fecha or None
+    if "monto_prometido" in payload:
+        row["monto_prometido"] = monto
+    if "telefono" in payload:
+        row["telefono"] = (payload.get("telefono") or "").strip() or None
+    if "observacion" in payload:
+        row["observacion"] = (payload.get("observacion") or "").strip() or None
+    if "status" in payload:
+        status_val = (payload.get("status") or "pendiente").strip().lower()
+        if status_val not in {"pendiente", "cumplida", "incumplida"}:
+            raise ValueError("Estado inválido. Use pendiente, cumplida o incumplida.")
+        row["status"] = status_val
+    if "registrado_por" in payload:
+        row["registrado_por"] = (payload.get("registrado_por") or "").strip() or None
+    if promesa_id:
+        if not row:
+            raise ValueError("No hay cambios para guardar.")
+        result = supabase_patch("copacol_promesas_pago", f"id=eq.{urllib.parse.quote(promesa_id)}", row)
+    else:
+        row.setdefault("status", "pendiente")
+        result = supabase_insert("copacol_promesas_pago", row)
+    return result[0] if isinstance(result, list) and result else result
+
+
+def delete_promesa(promesa_id: str) -> None:
+    if not promesa_id:
+        raise ValueError("ID requerido.")
+    supabase_delete("copacol_promesas_pago", f"id=eq.{urllib.parse.quote(promesa_id)}")
+
+
+def update_client_asesor(nit: str, payload: dict) -> dict:
+    if not nit:
+        raise ValueError("NIT requerido.")
+    codigo = (payload.get("asesor_codigo") or "").strip()
+    nombre = (payload.get("asesor_nombre") or "").strip()
+    action = (payload.get("action") or "").strip().lower()
+    if action == "quitar" or (not codigo and not nombre):
+        update_row = {"asesor_codigo": None, "asesor_nombre": None}
+    else:
+        if not codigo:
+            raise ValueError("El código del asesor es obligatorio.")
+        if not nombre:
+            raise ValueError("El nombre del asesor es obligatorio.")
+        update_row = {"asesor_codigo": codigo, "asesor_nombre": nombre}
+    result = supabase_patch(
+        "copacol_clients",
+        f"nit=eq.{urllib.parse.quote(nit)}",
+        update_row,
+    )
+    if not result:
+        raise ValueError("Cliente no encontrado.")
+    return result[0] if isinstance(result, list) else result
+
+
+def build_asesores_catalog() -> list[dict]:
+    clients = fetch_all(
+        "copacol_clients",
+        "asesor_codigo,asesor_nombre",
+        "asesor_nombre.asc",
+        page_size=2000,
+    )
+    counts: dict[str, dict] = {}
+    for client in clients:
+        codigo = (client.get("asesor_codigo") or "").strip()
+        nombre = (client.get("asesor_nombre") or "").strip()
+        if not codigo and not nombre:
+            continue
+        key = codigo or nombre
+        entry = counts.setdefault(key, {"asesor_codigo": codigo, "asesor_nombre": nombre, "clientes": 0})
+        entry["clientes"] += 1
+    return sorted(counts.values(), key=lambda row: (row.get("asesor_nombre") or "").upper())
+
+
 def build_client_payload(nit: str) -> dict:
     params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "1"})
     clients = supabase_get(
@@ -1823,6 +2046,22 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/promesas":
+            try:
+                params = urllib.parse.parse_qs(parsed.query)
+                status = (params.get("status", ["all"])[0] or "all").lower()
+                json_response(self, 200, build_promesas_module_payload(status))
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/asesores":
+            try:
+                json_response(self, 200, {"asesores": build_asesores_catalog()})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/config":
             json_response(
                 self,
@@ -1882,6 +2121,18 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 200, {"status": "ok", "data": result})
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/promesas":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                result = upsert_promesa(data)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
             return
 
         if parsed.path.startswith("/api/client/") and parsed.path.endswith("/whatsapp"):
@@ -2061,6 +2312,53 @@ Reglas de respuesta:
             json_response(self, 200, preview)
         except Exception as exc:
             json_response(self, 400, {"error": str(exc)})
+
+    def do_PATCH(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(length) if length else b""
+
+        if parsed.path.startswith("/api/promesas/"):
+            promesa_id = parsed.path[len("/api/promesas/"):]
+            try:
+                data = json.loads(raw_body.decode("utf-8") or "{}")
+                result = upsert_promesa(data, promesa_id=promesa_id)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/asesor"):
+            nit = parsed.path[len("/api/client/"):-len("/asesor")]
+            try:
+                data = json.loads(raw_body.decode("utf-8") or "{}")
+                result = update_client_asesor(nit, data)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        json_response(self, 404, {"error": "Not found"})
+
+    def do_DELETE(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path.startswith("/api/promesas/"):
+            promesa_id = parsed.path[len("/api/promesas/"):]
+            try:
+                delete_promesa(promesa_id)
+                json_response(self, 200, {"status": "ok"})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        json_response(self, 404, {"error": "Not found"})
 
 
 def main() -> None:
