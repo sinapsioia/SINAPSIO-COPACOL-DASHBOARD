@@ -72,7 +72,7 @@
           <div class="status-pill">
             <div class="status-dot"></div>
             <div>
-              <div class="status-title">Supabase en vivo</div>
+              <div class="status-title">Base de datos en vivo</div>
               <div class="status-sub">Operación</div>
             </div>
           </div>
@@ -109,7 +109,10 @@
             <select id="agingFilter">
               <option value="all">Todas</option>
               <option value="vigente">Vigente</option>
-              <option value="1_30">1-30 días</option>
+              <option value="por_vencer_8">-8 a 0 días</option>
+              <option value="1_4">1-4 días</option>
+              <option value="5_15">5-15 días</option>
+              <option value="16_30">16-30 días</option>
               <option value="31_60">31-60 días</option>
               <option value="61_90">61-90 días</option>
               <option value="91_120">91-120 días</option>
@@ -155,6 +158,16 @@
               <span>Crédito 45 días</span>
               <strong id="kpiCredito45">-</strong>
               <small id="kpiCredito45Pct">-</small>
+            </article>
+            <article class="metric-card blue">
+              <span>Platam 30 días</span>
+              <strong id="kpiPlatam30">-</strong>
+              <small id="kpiPlatam30Pct">-</small>
+            </article>
+            <article class="metric-card blue">
+              <span>Platam 60 días</span>
+              <strong id="kpiPlatam60">-</strong>
+              <small id="kpiPlatam60Pct">-</small>
             </article>
             <article class="metric-card good">
               <span>Contado</span>
@@ -208,6 +221,11 @@
               <span>Gestión cobro</span>
               <strong>Base por construir</strong>
               <small>Meta: ≥ 90%</small>
+            </div>
+            <div>
+              <span>Sin gestión 5d</span>
+              <strong id="kpiNoGestion5d">-</strong>
+              <small>Clientes vencidos sin contacto</small>
             </div>
           </div>
         </section>
@@ -287,7 +305,7 @@
             <div class="section-head">
               <div>
                 <h2>Acción diaria</h2>
-                <span class="muted">Clientes que conviene gestionar primero</span>
+                <span class="muted">Ordenado por días de mora — gestionar hoy</span>
               </div>
             </div>
             <div id="priorityList" class="priority-list"></div>
@@ -308,7 +326,7 @@
               <div class="section-head">
                 <div>
                   <h2>Pareto de clientes</h2>
-                  <span class="muted">Concentración del saldo vencido</span>
+                  <span class="muted">Ordenado por $ vencido — concentración del saldo</span>
                 </div>
               </div>
               <div id="paretoChart" class="pareto-chart"></div>
@@ -369,7 +387,9 @@
                 <tr>
                   <th>Asesor</th>
                   <th>Cartera gral.</th>
-                  <th>1-30d</th>
+                  <th>1-4d</th>
+                  <th>5-15d</th>
+                  <th>16-30d</th>
                   <th>31-60d</th>
                   <th>61-90d</th>
                   <th>91-120d</th>
@@ -394,6 +414,7 @@
               <button class="segment active" data-mode="all">Todas</button>
               <button class="segment" data-mode="overdue">Vencidas</button>
               <button class="segment" data-mode="soon">Próximas</button>
+              <button id="downloadInvoicesBtn" type="button">Descargar Excel</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -422,6 +443,7 @@
               <h2>Clientes a gestionar</h2>
               <span id="clientCount" class="muted">-</span>
             </div>
+            <button id="noGestion5dBtn" type="button">Sin gestión 5d</button>
           </div>
           <div class="client-grid" id="clientGrid"></div>
         </section>
@@ -441,10 +463,10 @@
           </form>
           <div id="importResult" class="import-result import-empty">
             <strong>Esperando archivo</strong>
-            <span>Selecciona el Excel exportado desde Siigo para validar el corte antes de actualizar Supabase.</span>
+            <span>Selecciona el Excel exportado desde Siigo para validar el corte antes de actualizar la base de datos.</span>
           </div>
           <div id="importConfirm" class="import-confirm">
-            <p id="importConfirmMsg">Validación exitosa. ¿Confirmar importación a Supabase?</p>
+            <p id="importConfirmMsg">Validación exitosa. ¿Confirmar actualización de datos?</p>
             <small id="importConfirmDetail"></small>
             <button id="confirmImportBtn" class="confirm-btn">Confirmar importación</button>
           </div>

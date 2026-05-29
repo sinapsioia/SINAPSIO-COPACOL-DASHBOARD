@@ -5,15 +5,15 @@
 
 /* === TOKENS === */
 :root {
-  --brand-500: #1F2D7C;
-  --brand-600: #18225E;
-  --brand-700: #121A47;
-  --brand-100: #DDE2F4;
-  --brand-50:  #EEF1FA;
+  --brand-500: #001871;
+  --brand-600: #00135C;
+  --brand-700: #000E45;
+  --brand-100: #DCE4FF;
+  --brand-50:  #EEF2FF;
 
-  --accent:      #EA580C;
-  --accent-soft: #FED7AA;
-  --accent-50:   #FFF4ED;
+  --accent:      #FF6900;
+  --accent-soft: #FFD6B8;
+  --accent-50:   #FFF3EA;
 
   --success:      #16A34A;
   --success-soft: #DCFCE7;
@@ -35,8 +35,8 @@
   --border:   #E5DDD0;
   --border-2: #D7CCBA;
 
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-sans:    'Geist', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Canaro', 'Fraunces', Georgia, serif;
+  --font-sans:    'Canaro', 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono:    'Geist Mono', 'Roboto Mono', ui-monospace, monospace;
 
   --pad-card: 22px;
@@ -314,6 +314,9 @@ button:hover { background: var(--brand-700); }
   letter-spacing: 0.02em;
   box-shadow: var(--shadow-1);
 }
+.risk-pill.risk-green { background: var(--success-soft); color: var(--success); border-color: #86efac; }
+.risk-pill.risk-yellow { background: var(--warning-soft); color: var(--warning); border-color: #fcd34d; }
+.risk-pill.risk-red { background: var(--danger-soft); color: var(--danger); border-color: #fca5a5; }
 
 /* ============================================
    PAGE SECTIONS
@@ -392,7 +395,7 @@ input[type="number"] {
 .board-grid,
 .goal-strip { display: grid; gap: 14px; }
 .board-header { grid-template-columns: minmax(0,1fr) auto; align-items: center; }
-.executive-grid { grid-template-columns: repeat(5, minmax(150px,1fr)); }
+.executive-grid { grid-template-columns: repeat(7, minmax(140px,1fr)); }
 
 .metric-card {
   min-height: 124px;
@@ -475,7 +478,7 @@ input[type="number"] {
 .column-track i { display: block; width: 68%; min-height: 3px; border-radius: 7px 7px 0 0; }
 .column-item span { color: var(--ink-3); font-size: 12px; font-weight: 500; }
 
-.goal-strip { grid-template-columns: repeat(4, minmax(160px,1fr)); }
+.goal-strip { grid-template-columns: repeat(5, minmax(150px,1fr)); }
 .goal-strip div {
   padding: 14px; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -649,7 +652,12 @@ button.rank-row:hover { background: var(--surface-2); }
   display: grid; grid-template-columns: repeat(4,1fr);
   gap: 8px; align-items: end; min-height: 180px;
 }
-.effort-item { display: grid; gap: 8px; text-align: center; }
+.effort-item {
+  display: grid; gap: 8px; text-align: center;
+  background: transparent; border: 0; padding: 0; box-shadow: none;
+  cursor: pointer; color: inherit;
+}
+.effort-item:hover { background: transparent; }
 .effort-bar {
   height: 108px; display: flex; align-items: end; justify-content: center;
   border-bottom: 1px solid var(--border);
@@ -783,10 +791,10 @@ tbody tr:hover td { background: var(--surface-2); }
 }
 .client-split { color: var(--ink-3); font-size: 12px; }
 .client-split span { display: grid; }
-.client-actions { display: flex; gap: 8px; }
+.client-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .client-actions a, .client-actions span, .client-actions button {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 42px; height: 32px; padding: 0 10px;
+  width: 100%; min-width: 0; height: 32px; padding: 0 10px;
   border-radius: var(--radius-sm);
   background: var(--surface-2); color: var(--brand-500);
   text-decoration: none; font-size: 12px; font-weight: 600;
@@ -1328,7 +1336,10 @@ input[type="file"] {
   border-radius: 999px; font: 600 10px var(--font-mono);
 }
 .chip-vigente  { background: var(--success-soft); color: var(--success); }
-.chip-1_30     { background: var(--warning-soft); color: var(--warning); }
+.chip-por_vencer_8 { background: var(--success-soft); color: var(--success); }
+.chip-1_4      { background: var(--warning-soft); color: var(--warning); }
+.chip-5_15     { background: var(--accent-50); color: var(--accent); }
+.chip-16_30    { background: #ffe8d6; color: #9a3412; }
 .chip-31_60    { background: var(--accent-50); color: var(--warm-terra,#C2410C); }
 .chip-61_90    { background: #ffe8d6; color: #9a3412; }
 .chip-91_120   { background: var(--danger-soft); color: var(--danger); }

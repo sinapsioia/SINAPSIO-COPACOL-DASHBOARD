@@ -23,16 +23,27 @@ let supabaseConfig = null;
 let importToken = null;
 let drawerNit = null;
 let importHistory = [];
+let clientNoGestionMode = false;
 
 const agingLabels = {
   vigente: ["Vigente", "var(--green)"],
-  "1_30": ["1-30 días", "var(--yellow)"],
+  por_vencer_8: ["-8 a 0 días", "var(--green)"],
+  "1_4": ["1-4 días", "var(--yellow)"],
+  "5_15": ["5-15 días", "var(--orange)"],
+  "16_30": ["16-30 días", "#ea580c"],
   "31_60": ["31-60 días", "var(--orange)"],
   "61_90": ["61-90 días", "var(--red)"],
   "91_120": ["91-120 días", "#e5484d"],
   "121_180": ["121-180 días", "#9f2d20"],
   "181_plus": ["+181 días", "#5b1a14"],
 };
+
+const agingKeys = Object.keys(agingLabels);
+const overdueAgingKeys = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"];
+
+function emptyAging() {
+  return Object.fromEntries(agingKeys.map((key) => [key, 0]));
+}
 
 const conditionLabels = {
   platam_30d: ["Platam 30 días", "#3b82f6"],
@@ -184,12 +195,34 @@ function filteredClients() {
         .join(" ")
         .toLowerCase()
         .includes(filters.term);
-    const agingOk =
-      filters.aging === "all" ||
-      (filters.aging === "vigente" && amount(client.total_vencido) === 0) ||
-      (filters.aging !== "vigente" && amount(client.total_vencido) > 0);
-    return sellerOk && amountOk && textOk && agingOk;
+    const clientBucket = agingBucketFromDays(amount(client.dias_mora_max), amount(client.total_vencido));
+    const agingOk = filters.aging === "all" || clientBucket === filters.aging;
+    const noGestionOk = !clientNoGestionMode || isNoGestion5d(client);
+    return sellerOk && amountOk && textOk && agingOk && noGestionOk;
   });
+}
+
+function isNoGestion5d(client) {
+  if (amount(client.total_vencido) <= 0) return false;
+  const raw = client.ultimo_contacto;
+  if (!raw) return true;
+  const last = new Date(raw);
+  if (Number.isNaN(last.getTime())) return true;
+  return (Date.now() - last.getTime()) / 86400000 >= 5;
+}
+
+function agingBucketFromDays(days, overdueAmount = 1) {
+  if (amount(overdueAmount) <= 0) return days >= -8 ? "por_vencer_8" : "vigente";
+  if (days < -8) return "vigente";
+  if (days <= 0) return "por_vencer_8";
+  if (days <= 4) return "1_4";
+  if (days <= 15) return "5_15";
+  if (days <= 30) return "16_30";
+  if (days <= 60) return "31_60";
+  if (days <= 90) return "61_90";
+  if (days <= 120) return "91_120";
+  if (days <= 180) return "121_180";
+  return "181_plus";
 }
 
 function buildSellerAging(rows) {
@@ -201,13 +234,7 @@ function buildSellerAging(rows) {
       nombre: invoice.asesor_nombre || "Sin asesor",
       total: 0,
       vencido: 0,
-      vigente: 0,
-      "1_30": 0,
-      "31_60": 0,
-      "61_90": 0,
-      "91_120": 0,
-      "121_180": 0,
-      "181_plus": 0,
+      ...emptyAging(),
       pct_vencido: 0,
     };
     const rawValue = amount(invoice.monto);
@@ -225,7 +252,7 @@ function buildSellerAging(rows) {
 function buildView() {
   const invoices = filteredInvoices(false);
   const clients = filteredClients();
-  const aging = { vigente: 0, "1_30": 0, "31_60": 0, "61_90": 0, "91_120": 0, "121_180": 0, "181_plus": 0 };
+  const aging = emptyAging();
   const conditionMap = {};
   const dueSoon = [];
   let totalVencido = 0;
@@ -296,7 +323,7 @@ async function loadDashboard() {
   const response = await fetch("/api/dashboard", { cache: "no-store" });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "No se pudo cargar Supabase");
+    throw new Error(error.error || "No se pudo cargar la base de datos");
   }
   dashboard = await response.json();
   hydrateFilters();
@@ -336,6 +363,8 @@ function renderDashboard() {
   const overdueRatio = summary.total_saldo ? summary.total_vencido / summary.total_saldo : 0;
   const credito60 = conditionValue("credito_60d");
   const credito45 = conditionValue("credito_45d");
+  const platam30 = conditionValue("platam_30d");
+  const platam60 = conditionValue("platam_60d");
   const contado = conditionValue("contado");
   const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionValue("saldos_a_favor"));
 
@@ -357,11 +386,19 @@ function renderDashboard() {
   setText("kpiCredito60Pct", pct.format(credito60 / summary.total_saldo || 0));
   setText("kpiCredito45", moneyM(credito45));
   setText("kpiCredito45Pct", pct.format(credito45 / summary.total_saldo || 0));
+  setText("kpiPlatam30", moneyM(platam30));
+  setText("kpiPlatam30Pct", pct.format(platam30 / summary.total_saldo || 0));
+  setText("kpiPlatam60", moneyM(platam60));
+  setText("kpiPlatam60Pct", pct.format(platam60 / summary.total_saldo || 0));
   setText("kpiContado", moneyM(contado));
   setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyM(saldosFavor)}` : pct.format(contado / summary.total_saldo || 0));
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
-  setText("riskPill", overdueRatio > 0.55 ? "Riesgo alto: priorizar vencidos" : overdueRatio > 0.35 ? "Riesgo medio: seguimiento diario" : "Cartera controlada");
+  setText("kpiNoGestion5d", number.format(dashboard.clients.filter(isNoGestion5d).length));
+  const riskClass = overdueRatio <= 0.08 ? "risk-green" : overdueRatio <= 0.15 ? "risk-yellow" : "risk-red";
+  const riskText = overdueRatio <= 0.08 ? "Verde: cartera controlada" : overdueRatio <= 0.15 ? "Amarillo: seguimiento diario" : "Rojo: priorizar vencidos";
+  $("riskPill").className = `risk-pill ${riskClass}`;
+  setText("riskPill", riskText);
   $("donut").style.setProperty("--pct", `${Math.min(100, overdueRatio * 100)}%`);
   $("overdueProgress").style.width = `${Math.min(100, overdueRatio * 100)}%`;
 
@@ -505,12 +542,12 @@ function renderAdvisorTable() {
   const rows = (dashboard.view || dashboard).seller_aging || [];
   const totals = rows.reduce(
     (acc, row) => {
-      ["total", "1_30", "31_60", "61_90", "91_120", "121_180", "181_plus", "vencido"].forEach((key) => {
+      ["total", ...agingKeys, "vencido"].forEach((key) => {
         acc[key] += amount(row[key]);
       });
       return acc;
     },
-    { total: 0, "1_30": 0, "31_60": 0, "61_90": 0, "91_120": 0, "121_180": 0, "181_plus": 0, vencido: 0 },
+    { total: 0, ...emptyAging(), vencido: 0 },
   );
   const body = rows
     .map((row) => {
@@ -519,7 +556,9 @@ function renderAdvisorTable() {
         <tr class="advisor-row" data-advisor="${row.codigo}">
           <td>${row.nombre}</td>
           <td>${moneyM(row.total)}</td>
-          <td>${moneyM(row["1_30"])}</td>
+          <td>${moneyM(row["1_4"])}</td>
+          <td>${moneyM(row["5_15"])}</td>
+          <td>${moneyM(row["16_30"])}</td>
           <td>${moneyM(row["31_60"])}</td>
           <td>${moneyM(row["61_90"])}</td>
           <td>${moneyM(row["91_120"])}</td>
@@ -538,7 +577,9 @@ function renderAdvisorTable() {
       <tr class="total-row">
         <td>Total asesores</td>
         <td>${moneyM(totals.total)}</td>
-        <td>${moneyM(totals["1_30"])}</td>
+        <td>${moneyM(totals["1_4"])}</td>
+        <td>${moneyM(totals["5_15"])}</td>
+        <td>${moneyM(totals["16_30"])}</td>
         <td>${moneyM(totals["31_60"])}</td>
         <td>${moneyM(totals["61_90"])}</td>
         <td>${moneyM(totals["91_120"])}</td>
@@ -584,10 +625,10 @@ function renderPareto() {
 
 function renderEffortChart() {
   const items = [
-    { label: "Recordatorio", keys: ["1_30"], color: "var(--yellow)" },
-    { label: "Negociación", keys: ["31_60"], color: "var(--orange)" },
-    { label: "Escalar asesor", keys: ["61_90", "91_120"], color: "var(--red)" },
-    { label: "Plan especial", keys: ["121_180", "181_plus"], color: "#5b1a14" },
+    { label: "Ciclo bot", keys: ["1_4"], color: "var(--yellow)", filter: "1_4" },
+    { label: "Gestión humana", keys: ["5_15"], color: "var(--orange)", filter: "5_15" },
+    { label: "Negociación", keys: ["16_30"], color: "var(--red)", filter: "16_30" },
+    { label: "Plan especial", keys: ["31_60", "61_90", "91_120", "121_180", "181_plus"], color: "#5b1a14", filter: "31_60" },
   ];
   const aging = (dashboard.view || dashboard).aging;
   const max = Math.max(...items.map((item) => item.keys.reduce((sum, key) => sum + amount(aging[key]), 0)), 1);
@@ -596,14 +637,21 @@ function renderEffortChart() {
       const value = item.keys.reduce((sum, key) => sum + amount(aging[key]), 0);
       const height = Math.max(4, (value / max) * 100);
       return `
-        <div class="effort-item">
+        <button class="effort-item effort-filter" data-aging="${item.filter}">
           <div class="effort-bar"><i style="height:${height}%;background:${item.color}"></i></div>
           <strong>${moneyM(value)}</strong>
           <span>${item.label}</span>
-        </div>
+        </button>
       `;
     })
     .join("");
+  document.querySelectorAll(".effort-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("agingFilter").value = button.dataset.aging;
+      showPage("clientes");
+      rerenderFilteredViews();
+    });
+  });
 }
 
 function renderDueSoonChart() {
@@ -691,7 +739,7 @@ function openAdvisorModal(code) {
       <article><span>Semáforo</span><strong>${cls}</strong></article>
     </div>
     <div class="modal-aging">
-      ${["1_30", "31_60", "61_90", "91_120", "121_180", "181_plus"]
+      ${["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"]
         .map((key) => {
           const [label, color] = agingLabels[key];
           const width = Math.max(2, (amount(row[key]) / Math.max(row.vencido, 1)) * 100);
@@ -820,6 +868,8 @@ function clientCards(rows) {
 function renderClients() {
   const rows = filteredClients().sort((a, b) => amount(b.total_vencido) - amount(a.total_vencido) || amount(b.total_saldo) - amount(a.total_saldo));
   setText("clientCount", `${number.format(rows.length)} clientes visibles`);
+  const btn = $("noGestion5dBtn");
+  if (btn) btn.classList.toggle("active", clientNoGestionMode);
   $("clientGrid").innerHTML = clientCards(rows);
   $("clientGrid").querySelectorAll(".drawer-trigger").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -1178,8 +1228,11 @@ async function handleLogin(event) {
 
 function agingChipClass(days) {
   const d = Number(days || 0);
-  if (d <= 0) return "chip-vigente";
-  if (d <= 30) return "chip-1_30";
+  if (d < -8) return "chip-vigente";
+  if (d <= 0) return "chip-por_vencer_8";
+  if (d <= 4) return "chip-1_4";
+  if (d <= 15) return "chip-5_15";
+  if (d <= 30) return "chip-16_30";
   if (d <= 60) return "chip-31_60";
   if (d <= 90) return "chip-61_90";
   if (d <= 120) return "chip-91_120";
@@ -1228,6 +1281,7 @@ function renderDrawer(payload) {
       <div class="drawer-info-row"><span>Plazo real</span><strong>${client.plazo_pago_real ? `${number.format(client.plazo_pago_real)} días` : "Fallback cartera"}</strong></div>
       ${client.cupo_credito ? `<div class="drawer-info-row"><span>Cupo crédito</span><strong>${money.format(amount(client.cupo_credito))}</strong></div>` : ""}
       <div class="drawer-info-row"><span>Ciudad</span><strong>${client.ciudad || "Sin ciudad"}</strong></div>
+      <div class="drawer-info-row"><span>Registro plataforma</span><strong>${formatDateTime(client.created_at)}</strong></div>
       ${client.telefono ? `<div class="drawer-info-row"><span>Teléfono</span><strong>${client.telefono}</strong></div>` : ""}
       ${client.direccion ? `<div class="drawer-info-row"><span>Dirección</span><strong>${client.direccion}</strong></div>` : ""}
     </div>`;
@@ -1235,6 +1289,7 @@ function renderDrawer(payload) {
   const actionsHtml = `
     <div class="drawer-actions-row">
       <button class="drawer-action-btn" id="registerGestionBtn">+ Registrar gestión</button>
+      <button class="drawer-action-btn" id="registerPromesaBtn">+ Registrar promesa</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
       ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
     </div>`;
@@ -1268,6 +1323,12 @@ function renderDrawer(payload) {
 
   $("drawerBody").innerHTML = kpisHtml + infoHtml + actionsHtml + invoicesHtml + historyHtml;
   $("registerGestionBtn").addEventListener("click", () => openContactModal(client.nit, name));
+  $("registerPromesaBtn").addEventListener("click", () => {
+    openContactModal(client.nit, name);
+    $("contactResultado").value = "promesa";
+    $("promesaGroup").style.display = "";
+    $("montoGroup").style.display = "";
+  });
   const waBtn = $("triggerWhatsAppBtn");
   if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
 }
@@ -1353,6 +1414,39 @@ async function saveContact() {
   }
 }
 
+function downloadVisibleInvoices() {
+  const rows = filteredInvoices().sort((a, b) => amount(b.dias_mora) - amount(a.dias_mora) || amount(b.monto) - amount(a.monto));
+  const headers = ["Cliente", "NIT", "Factura", "Vendedor", "Ciudad", "Vence", "Dias", "Saldo", "Estado", "Condicion"];
+  const csvRows = [
+    headers,
+    ...rows.map((invoice) => [
+      invoice.cliente || "",
+      invoice.nit || "",
+      invoice.numero_factura || "",
+      invoice.asesor_nombre || "",
+      invoice.ciudad || "",
+      invoice.fecha_vencimiento || "",
+      amount(invoice.dias_mora),
+      amount(invoice.monto),
+      invoice.estado || "",
+      conditionLabel(invoice.condicion_pago_real || invoice.condicion_pago),
+    ]),
+  ];
+  const csv = csvRows
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const suffix = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `cartera-copacol-${suffix}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ── Import confirm ────────────────────────────────────────────────────────────
 
 async function confirmImport() {
@@ -1395,6 +1489,7 @@ $("clearFilters").addEventListener("click", () => {
   $("sellerFilter").value = "all";
   $("agingFilter").value = "all";
   $("minAmount").value = "";
+  clientNoGestionMode = false;
   rerenderFilteredViews();
 });
 document.querySelectorAll(".segment").forEach((button) => {
@@ -1407,6 +1502,12 @@ document.querySelectorAll(".segment").forEach((button) => {
 });
 $("importForm").addEventListener("submit", previewImport);
 $("confirmImportBtn").addEventListener("click", confirmImport);
+$("downloadInvoicesBtn").addEventListener("click", downloadVisibleInvoices);
+$("noGestion5dBtn").addEventListener("click", () => {
+  clientNoGestionMode = !clientNoGestionMode;
+  showPage("clientes");
+  rerenderFilteredViews();
+});
 $("refreshHistoryBtn").addEventListener("click", loadImportHistory);
 $("closeDrawer").addEventListener("click", closeClientDrawer);
 $("drawerBackdrop").addEventListener("click", closeClientDrawer);

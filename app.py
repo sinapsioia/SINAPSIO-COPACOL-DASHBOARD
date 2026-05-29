@@ -59,6 +59,21 @@ N8N_PROACTIVE_WEBHOOK_URL = os.environ.get("N8N_PROACTIVE_WEBHOOK_URL", "").stri
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
 
+AGING_KEYS = [
+    "vigente",
+    "por_vencer_8",
+    "1_4",
+    "5_15",
+    "16_30",
+    "31_60",
+    "61_90",
+    "91_120",
+    "121_180",
+    "181_plus",
+]
+OVERDUE_AGING_KEYS = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"]
+ALLOWED_SIIGO_ACCOUNT_PREFIXES = ("13050501", "13050522")
+
 
 def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | list) -> None:
     body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
@@ -228,10 +243,16 @@ def credit_condition_key(plazo, observacion: str = "") -> str:
 
 
 def aging_bucket(days: float) -> str:
-    if days <= 0:
+    if days < -8:
         return "vigente"
+    if days <= 0:
+        return "por_vencer_8"
+    if days <= 4:
+        return "1_4"
+    if days <= 15:
+        return "5_15"
     if days <= 30:
-        return "1_30"
+        return "16_30"
     if days <= 60:
         return "31_60"
     if days <= 90:
@@ -241,6 +262,21 @@ def aging_bucket(days: float) -> str:
     if days <= 180:
         return "121_180"
     return "181_plus"
+
+
+def empty_aging() -> dict[str, float]:
+    return {key: 0.0 for key in AGING_KEYS}
+
+
+def aging_overdue_total(aging: dict) -> float:
+    return sum(money(aging.get(key)) for key in OVERDUE_AGING_KEYS)
+
+
+def allowed_siigo_account(value: str) -> bool:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    if not digits:
+        return True
+    return digits.startswith(ALLOWED_SIIGO_ACCOUNT_PREFIXES)
 
 
 def row_stamp(row: dict) -> str:
@@ -371,7 +407,7 @@ def build_dashboard_payload() -> dict:
 
     by_seller: dict[str, dict] = {}
     by_city: dict[str, float] = defaultdict(float)
-    aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "91_120": 0.0, "121_180": 0.0, "181_plus": 0.0}
+    aging = empty_aging()
     condition_mix: dict[str, float] = defaultdict(float)
     seller_aging: dict[str, dict] = {}
     saldo_neto = 0.0
@@ -440,7 +476,10 @@ def build_dashboard_payload() -> dict:
                 "total": 0.0,
                 "vencido": 0.0,
                 "vigente": 0.0,
-                "1_30": 0.0,
+                "por_vencer_8": 0.0,
+                "1_4": 0.0,
+                "5_15": 0.0,
+                "16_30": 0.0,
                 "31_60": 0.0,
                 "61_90": 0.0,
                 "91_120": 0.0,
@@ -507,7 +546,10 @@ def build_dashboard_payload() -> dict:
                 "total": 0.0,
                 "vencido": 0.0,
                 "vigente": 0.0,
-                "1_30": 0.0,
+                "por_vencer_8": 0.0,
+                "1_4": 0.0,
+                "5_15": 0.0,
+                "16_30": 0.0,
                 "31_60": 0.0,
                 "61_90": 0.0,
                 "91_120": 0.0,
@@ -536,8 +578,8 @@ def build_dashboard_payload() -> dict:
         if vencido > 0:
             aging[overdue_bucket] += vencido
 
-    total_vigente = aging["vigente"]
-    total_vencido = aging["1_30"] + aging["31_60"] + aging["61_90"] + aging["91_120"] + aging["121_180"] + aging["181_plus"]
+    total_vigente = aging["vigente"] + aging["por_vencer_8"]
+    total_vencido = aging_overdue_total(aging)
     total_saldo = total_vigente + total_vencido
     vencidos = sum(1 for stats in client_stats.values() if stats["vencido"] > 0)
     avg_mora_vencida = 0.0
@@ -654,9 +696,9 @@ def snapshot_control_from_preview(preview: dict) -> dict:
         "saldo_total": money(preview.get("saldo_total")),
         "total_vencido": sum(
             money((preview.get("aging") or {}).get(key))
-            for key in ["1_30", "31_60", "61_90", "90_plus"]
+            for key in OVERDUE_AGING_KEYS
         ),
-        "total_vigente": money((preview.get("aging") or {}).get("vigente")),
+        "total_vigente": money((preview.get("aging") or {}).get("vigente")) + money((preview.get("aging") or {}).get("por_vencer_8")),
     }
     try:
         summary = build_dashboard_payload()["summary"]
@@ -968,7 +1010,7 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
 
     if any(term in q for term in ["90", "+90", "noventa"]):
         over_90 = money(aging.get("90_plus") or aging.get("91_120") or 0) + money(aging.get("121_180")) + money(aging.get("181_plus"))
-        return f"La cartera superior a 90 días está en {fmt(over_90)} según la vista actual. Si ese valor es bajo, el foco operativo debe estar en 1-30 y 31-60 días para evitar que escale."
+        return f"La cartera superior a 90 días está en {fmt(over_90)} según la vista actual. Si ese valor es bajo, el foco operativo debe estar en 1-4, 5-15, 16-30 y 31-60 días para evitar que escale."
 
     if any(term in q for term in ["semáforo", "semaforo", "verde", "amarillo", "rojo"]):
         return f"El semáforo está en {semaforo}: cartera vencida {fmt(total_vencido)} sobre saldo total {fmt(total_saldo)}, equivalente a {pct_vencido:.1f}%. Si supera 15%, lo trataría como alerta roja operativa."
@@ -1252,7 +1294,7 @@ def parse_xlsx(path: Path) -> dict:
                 {"vendedor": key, "saldo": value}
                 for key, value in sorted(by_seller.items(), key=lambda item: item[1], reverse=True)[:10]
             ],
-            "message": "Validación lista. Confirma para escribir en Supabase.",
+            "message": "Validación lista. Confirma para actualizar la base de datos.",
         }
         preview["control_cambios"] = snapshot_control_from_preview(preview)
         return preview
@@ -1324,7 +1366,7 @@ def parse_xlsx(path: Path) -> dict:
     records = []
     by_client: dict[str, dict] = {}
     by_seller: dict[str, float] = defaultdict(float)
-    aging = {"vigente": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "91_120": 0.0, "121_180": 0.0, "181_plus": 0.0}
+    aging = empty_aging()
     total_saldo = 0.0
     saldo_neto = 0.0
     saldos_a_favor = 0.0
@@ -1344,6 +1386,9 @@ def parse_xlsx(path: Path) -> dict:
         if tipo_mov not in {"F", "R", "G", "N", "L"}:
             continue
         if any(str(value).strip().startswith("Total") for value in raw):
+            continue
+        raw_account = safe_cell(raw, cols["cuenta"])
+        if not allowed_siigo_account(raw_account):
             continue
 
         nit_key = normalize_nit(nit)
@@ -1384,6 +1429,7 @@ def parse_xlsx(path: Path) -> dict:
             "telefono_2": safe_cell(raw, cols["telefono_2"]),
             "direccion": safe_cell(raw, cols["direccion"]),
             "cuenta": condition,
+            "cuenta_siigo": raw_account,
             "documento": documento,
             "fecha_emision": fecha_emision,
             "fecha_vencimiento": fecha_vencimiento,
@@ -1418,20 +1464,7 @@ def parse_xlsx(path: Path) -> dict:
             client["vencidas"] += 1
             client["dias_mora_max"] = max(client["dias_mora_max"], dias)
 
-        if dias <= 0:
-            aging["vigente"] += saldo
-        elif dias <= 30:
-            aging["1_30"] += saldo
-        elif dias <= 60:
-            aging["31_60"] += saldo
-        elif dias <= 90:
-            aging["61_90"] += saldo
-        elif dias <= 120:
-            aging["91_120"] += saldo
-        elif dias <= 180:
-            aging["121_180"] += saldo
-        else:
-            aging["181_plus"] += saldo
+        aging[aging_bucket(dias)] += saldo
 
     # Enrich by_client with extra fields needed for import
     for r in records:
@@ -1483,7 +1516,7 @@ def parse_xlsx(path: Path) -> dict:
             {"vendedor": key, "saldo": value}
             for key, value in sorted(by_seller.items(), key=lambda item: item[1], reverse=True)[:10]
         ],
-        "message": "Validación lista. Confirma para escribir en Supabase.",
+        "message": "Validación lista. Confirma para actualizar la base de datos.",
     }
     preview["control_cambios"] = snapshot_control_from_preview(preview)
     return preview
