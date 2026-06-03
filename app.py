@@ -701,7 +701,6 @@ def build_dashboard_payload() -> dict:
             (credit_term or {}).get("observacion") or invoice.get("condicion_pago"),
         )
         amount = money(invoice.get("monto"))
-        positive_amount = amount if amount > 0 else 0.0
         if amount < 0:
             saldos_a_favor += abs(amount)
             condition_key = "saldos_a_favor"
@@ -748,10 +747,10 @@ def build_dashboard_payload() -> dict:
                 "pct_vencido": 0.0,
             },
         )
-        seller_matrix["total"] += positive_amount
-        seller_matrix[bucket] += positive_amount
+        seller_matrix["total"] += amount
+        seller_matrix[bucket] += amount
         if days > 0:
-            seller_matrix["vencido"] += positive_amount
+            seller_matrix["vencido"] += amount
 
         condition_mix[condition_key] += amount
         saldo_neto += amount
@@ -759,13 +758,13 @@ def build_dashboard_payload() -> dict:
             client_stats[nit]["saldo"] += amount
             client_stats[nit]["facturas"] += 1
             if days > 0:
-                client_stats[nit]["vencido"] += positive_amount
+                client_stats[nit]["vencido"] += amount
                 client_stats[nit]["vencidas"] += 1
                 client_stats[nit]["dias_mora_max"] = max(client_stats[nit]["dias_mora_max"], days)
             else:
-                client_stats[nit]["vigente"] += positive_amount
+                client_stats[nit]["vigente"] += amount
 
-        aging[bucket] += positive_amount
+        aging[bucket] += amount
 
         enriched_invoices.append(
             {

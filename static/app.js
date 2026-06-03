@@ -244,10 +244,9 @@ function buildSellerAging(rows) {
       pct_vencido: 0,
     };
     const rawValue = amount(invoice.monto);
-    const value = Math.max(rawValue, 0);
-    row.total += value;
-    row[invoice.aging_bucket] += value;
-    if (amount(invoice.dias_mora) > 0) row.vencido += value;
+    row.total += rawValue;
+    row[invoice.aging_bucket] += rawValue;
+    if (amount(invoice.dias_mora) > 0) row.vencido += rawValue;
     grouped[code] = row;
   });
   return Object.values(grouped)
@@ -269,18 +268,17 @@ function buildView() {
 
   invoices.forEach((invoice) => {
     const rawValue = amount(invoice.monto);
-    const value = Math.max(rawValue, 0);
     const days = amount(invoice.dias_mora);
-    aging[invoice.aging_bucket] += value;
-    weightedDays += Math.max(days, 0) * value;
+    aging[invoice.aging_bucket] += rawValue;
+    weightedDays += Math.max(days, 0) * rawValue;
     const conditionKey = rawValue < 0 ? "saldos_a_favor" : (invoice.condicion_pago_real || invoice.condicion_pago || "sin_condicion_real");
     conditionMap[conditionKey] = (conditionMap[conditionKey] || 0) + rawValue;
     if (days > 0) {
-      totalVencido += value;
+      totalVencido += rawValue;
       facturasVencidas += 1;
       moraSum += days;
     } else {
-      totalVigente += value;
+      totalVigente += rawValue;
       if (days >= -7) dueSoon.push(invoice);
     }
   });
