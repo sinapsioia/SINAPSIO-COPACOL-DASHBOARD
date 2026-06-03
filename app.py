@@ -90,11 +90,20 @@ CITY_LABELS = {
 }
 
 
+def no_cache_headers(handler: BaseHTTPRequestHandler, clear_site_cache: bool = False) -> None:
+    handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0, private")
+    handler.send_header("Pragma", "no-cache")
+    handler.send_header("Expires", "0")
+    handler.send_header("Surrogate-Control", "no-store")
+    if clear_site_cache:
+        handler.send_header("Clear-Site-Data", '"cache"')
+
+
 def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | list) -> None:
     body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Cache-Control", "no-store")
+    no_cache_headers(handler)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -2184,7 +2193,7 @@ class Handler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
+        no_cache_headers(self, clear_site_cache=file_path.name == "index.html")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
