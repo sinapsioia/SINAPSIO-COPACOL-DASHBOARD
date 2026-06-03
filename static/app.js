@@ -185,7 +185,7 @@ function filteredInvoices(useMode = true) {
   return rows.filter((row) => {
     const sellerOk = filters.seller === "all" || row.asesor_codigo === filters.seller;
     const agingOk = filters.aging === "all" || row.aging_bucket === filters.aging;
-    const amountOk = amount(row.monto) >= filters.minAmount;
+    const amountOk = filters.minAmount <= 0 || amount(row.monto) >= filters.minAmount;
     return sellerOk && agingOk && amountOk && matchesText(row, filters.term);
   });
 }
@@ -194,7 +194,7 @@ function filteredClients() {
   const filters = activeFilters();
   return dashboard.clients.filter((client) => {
     const sellerOk = filters.seller === "all" || client.asesor_codigo === filters.seller;
-    const amountOk = amount(client.total_saldo) >= filters.minAmount;
+    const amountOk = filters.minAmount <= 0 || amount(client.total_saldo) >= filters.minAmount;
     const textOk =
       !filters.term ||
       [client.nit, client.razon_social, client.asesor_nombre, client.ciudad, client.telefono]
