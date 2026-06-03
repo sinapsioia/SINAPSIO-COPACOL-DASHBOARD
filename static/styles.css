@@ -890,6 +890,96 @@ button.rank-row:hover { background: var(--surface-2); }
 }
 .asesor-actual span { color: var(--ink-3); font-size: 12px; }
 
+.advisor-admin-grid {
+  display: grid;
+  grid-template-columns: minmax(260px,.8fr) minmax(0,1.8fr);
+  gap: 16px;
+  margin: 18px 0 28px;
+}
+.advisor-admin-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px;
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+}
+.advisor-manage-summary { margin-top: 14px; }
+.advisor-portfolio-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.advisor-portfolio-btn {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-1);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  min-height: auto;
+}
+.advisor-portfolio-btn:hover,
+.advisor-portfolio-btn.active {
+  background: var(--accent-50);
+  border-color: var(--accent-soft);
+  color: var(--ink-1);
+}
+.advisor-portfolio-btn strong,
+.advisor-portfolio-btn span { display: block; }
+.advisor-portfolio-btn strong { font-size: 13px; }
+.advisor-portfolio-btn span,
+.advisor-portfolio-btn em {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-style: normal;
+}
+.advisor-portfolio-btn b {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.advisor-assignment-bar {
+  display: grid;
+  grid-template-columns: minmax(180px,.8fr) minmax(260px,1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+.advisor-assignment-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.advisor-manage-table {
+  max-height: 520px;
+}
+.advisor-manage-table table {
+  min-width: 920px;
+}
+.advisor-manage-table td:first-child,
+.advisor-manage-table th:first-child {
+  width: 42px;
+  text-align: center;
+}
+.advisor-client-name {
+  display: grid;
+  gap: 3px;
+}
+.advisor-client-name span {
+  color: var(--ink-3);
+  font-weight: 500;
+  font-size: 11px;
+}
+
 /* ============================================
    SEGMENTED
    ============================================ */
@@ -1735,6 +1825,9 @@ input[type="file"] {
   .metric-card { grid-column: span 1; }
   .metric-card.kpi-large { grid-column: span 2; }
   .metric-card strong { font-size: 23px; }
+  .advisor-admin-grid,
+  .advisor-assignment-bar { grid-template-columns: 1fr; }
+  .advisor-assignment-actions { justify-content: flex-start; }
   .donut-row { justify-items: center; }
   .donut.big { width: min(180px,70vw); height: min(180px,70vw); }
   .column-chart, .effort-chart {

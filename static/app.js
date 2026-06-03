@@ -24,6 +24,10 @@ let importToken = null;
 let drawerNit = null;
 let importHistory = [];
 let clientNoGestionMode = false;
+let asesoresGestion = { summary: {}, asesores: [], catalogo: [], clientes: [] };
+let advisorManageFilter = "all";
+let advisorManageSearch = "";
+let advisorManageSelected = new Set();
 
 const agingLabels = {
   vigente: ["Vigente", "var(--green)"],
@@ -161,6 +165,15 @@ function advisorInvoices(code) {
 
 function advisorClients(code) {
   return dashboard.clients.filter((client) => client.asesor_codigo === code);
+}
+
+function advisorManageKey(row) {
+  if (row.advisor_key) return row.advisor_key;
+  if (isUncataloguedSeller(row)) return "__no_catalogado";
+  const code = String(row.asesor_codigo || "").trim();
+  const name = String(row.asesor_nombre || "").trim();
+  if ((!code && !name) || code.toLowerCase() === "sin_codigo" || name.toUpperCase() === "SIN ASESOR") return "__sin_asesor";
+  return `${code}|${name}`;
 }
 
 function cleanPhone(value) {
@@ -690,6 +703,213 @@ function renderAdvisorTable() {
   document.querySelectorAll(".advisor-row").forEach((row) => {
     row.addEventListener("click", () => openAdvisorModal(row.dataset.advisor));
   });
+}
+
+async function loadAsesoresGestion(force = false) {
+  const tbody = $("advisorManageClients");
+  if (!force && asesoresGestion.clientes.length) {
+    renderAsesoresGestion();
+    return;
+  }
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="muted">Cargando carteras activas…</td></tr>';
+  try {
+    const res = await fetch("/api/asesores/gestion", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudieron cargar carteras");
+    asesoresGestion = data;
+    asesoresCatalog = data.catalogo || [];
+    advisorManageSelected = new Set();
+    renderAsesoresGestion();
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="muted">Error: ${escapeHtml(err.message)}</td></tr>`;
+    setText("advisorManageCount", "No se pudieron cargar carteras");
+  }
+}
+
+function advisorManageFilteredClients() {
+  const term = advisorManageSearch.trim().toLowerCase();
+  return (asesoresGestion.clientes || []).filter((client) => {
+    const keyOk = advisorManageFilter === "all" || advisorManageKey(client) === advisorManageFilter;
+    const textOk =
+      !term ||
+      [client.razon_social, client.nit, client.asesor_nombre, client.asesor_codigo, client.ciudad]
+        .join(" ")
+        .toLowerCase()
+        .includes(term);
+    return keyOk && textOk;
+  });
+}
+
+function renderAdvisorTargetSelect() {
+  const select = $("advisorManageTarget");
+  if (!select) return;
+  select.innerHTML =
+    '<option value="">Seleccionar asesor</option>' +
+    (asesoresGestion.catalogo || [])
+      .map((row) => {
+        const value = `${row.asesor_codigo || ""}|${row.asesor_nombre || ""}`;
+        return `<option value="${escapeHtml(value)}">${escapeHtml(row.asesor_nombre || "Sin nombre")} · cód ${escapeHtml(row.asesor_codigo || "—")}</option>`;
+      })
+      .join("");
+}
+
+function renderAsesoresGestion() {
+  const summary = asesoresGestion.summary || {};
+  setText(
+    "advisorManageCount",
+    `${number.format(summary.clientes || 0)} clientes activos · corte ${summary.fecha_corte || "-"}`,
+  );
+  const strip = $("advisorManageSummary");
+  if (strip) {
+    strip.innerHTML = `
+      <article class="brand"><span>Asesores activos</span><strong>${number.format(summary.asesores_activos || 0)}</strong></article>
+      <article><span>Clientes activos</span><strong>${number.format(summary.clientes || 0)}</strong></article>
+      <article class="warn"><span>Sin asesor</span><strong>${number.format(summary.clientes_sin_asesor || 0)}</strong></article>
+      <article class="critical"><span>No catalogados</span><strong>${number.format(summary.clientes_no_catalogados || 0)}</strong></article>
+    `;
+  }
+  renderAdvisorTargetSelect();
+  const portfolioRows = [
+    {
+      key: "all",
+      asesor_nombre: "Todas las carteras",
+      clientes: summary.clientes || 0,
+      saldo: (asesoresGestion.asesores || []).reduce((sum, row) => sum + amount(row.saldo), 0),
+      vencido: (asesoresGestion.asesores || []).reduce((sum, row) => sum + amount(row.vencido), 0),
+      tipo: "all",
+    },
+    ...(asesoresGestion.asesores || []),
+  ];
+  const list = $("advisorPortfolioList");
+  if (list) {
+    list.innerHTML = portfolioRows
+      .map((row) => {
+        const active = advisorManageFilter === row.key ? "active" : "";
+        const label = row.asesor_nombre || "Sin asesor";
+        const ratio = amount(row.saldo) ? amount(row.vencido) / amount(row.saldo) : 0;
+        return `
+          <button class="advisor-portfolio-btn ${active}" data-advisor-filter="${escapeHtml(row.key)}">
+            <div>
+              <strong>${escapeHtml(label)}</strong>
+              <span>${number.format(row.clientes || 0)} clientes · ${pct.format(ratio)} vencido</span>
+              <em>${row.tipo === "no_catalogado" ? "Pendiente de clasificación" : row.tipo === "sin_asesor" ? "Sin responsable asignado" : row.asesor_codigo ? `Código ${escapeHtml(row.asesor_codigo)}` : ""}</em>
+            </div>
+            <b>${moneyM(row.saldo || 0)}</b>
+          </button>
+        `;
+      })
+      .join("");
+    list.querySelectorAll("[data-advisor-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        advisorManageFilter = button.dataset.advisorFilter || "all";
+        advisorManageSelected = new Set();
+        renderAsesoresGestion();
+      });
+    });
+  }
+  renderAdvisorManageClients();
+}
+
+function renderAdvisorManageClients() {
+  const rows = advisorManageFilteredClients();
+  const tbody = $("advisorManageClients");
+  if (!tbody) return;
+  const visibleNits = new Set(rows.map((row) => row.nit));
+  advisorManageSelected = new Set([...advisorManageSelected].filter((nit) => visibleNits.has(nit)));
+  setText(
+    "advisorManageSelection",
+    `${number.format(advisorManageSelected.size)} seleccionados · ${number.format(rows.length)} visibles`,
+  );
+  const selectAll = $("advisorManageSelectAll");
+  if (selectAll) {
+    selectAll.checked = rows.length > 0 && rows.every((row) => advisorManageSelected.has(row.nit));
+    selectAll.indeterminate = rows.some((row) => advisorManageSelected.has(row.nit)) && !selectAll.checked;
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="muted">No hay clientes con este filtro.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows
+    .map((client) => {
+      const checked = advisorManageSelected.has(client.nit) ? "checked" : "";
+      const advisor = client.tipo_asignacion === "sin_asesor"
+        ? "Sin asesor"
+        : client.tipo_asignacion === "no_catalogado"
+          ? "Vendedor no catalogado"
+          : client.asesor_nombre || "Sin asesor";
+      return `
+        <tr>
+          <td><input class="advisor-manage-check" type="checkbox" data-nit="${escapeHtml(client.nit)}" ${checked} /></td>
+          <td>
+            <div class="advisor-client-name">
+              <strong>${escapeHtml(client.razon_social || "Cliente")}</strong>
+              <span>${escapeHtml(client.ciudad || "Sin ciudad")}</span>
+            </div>
+          </td>
+          <td>${escapeHtml(client.nit || "-")}</td>
+          <td>${escapeHtml(advisor)}${client.asesor_codigo ? ` <span class="muted">(${escapeHtml(client.asesor_codigo)})</span>` : ""}</td>
+          <td>${moneyM(client.total_saldo)}</td>
+          <td>${moneyM(client.total_vencido)}</td>
+          <td>${number.format(Math.round(amount(client.dias_mora_max || 0)))}</td>
+          <td>${number.format(client.num_facturas || 0)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+  tbody.querySelectorAll(".advisor-manage-check").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) advisorManageSelected.add(checkbox.dataset.nit);
+      else advisorManageSelected.delete(checkbox.dataset.nit);
+      renderAdvisorManageClients();
+    });
+  });
+}
+
+function advisorManagePayload(action = "") {
+  const selected = $("advisorManageTarget")?.value || "";
+  const nuevoCodigo = $("advisorManageNewCodigo")?.value.trim() || "";
+  const nuevoNombre = $("advisorManageNewNombre")?.value.trim() || "";
+  const nits = [...advisorManageSelected];
+  if (action === "quitar") return { nits, action: "quitar" };
+  if (nuevoCodigo || nuevoNombre) return { nits, asesor_codigo: nuevoCodigo, asesor_nombre: nuevoNombre };
+  if (selected) {
+    const [codigo, ...nombreParts] = selected.split("|");
+    return { nits, asesor_codigo: codigo, asesor_nombre: nombreParts.join("|") };
+  }
+  throw new Error("Selecciona un asesor existente o ingresa código y nombre.");
+}
+
+async function saveAdvisorManageSelection(action = "") {
+  if (!advisorManageSelected.size) {
+    alert("Selecciona al menos un cliente.");
+    return;
+  }
+  if (action === "quitar" && !confirm("¿Quitar el asesor de los clientes seleccionados?")) return;
+  try {
+    $("assignSelectedAdvisor").disabled = true;
+    $("clearSelectedAdvisor").disabled = true;
+    const payload = advisorManagePayload(action);
+    const res = await fetch("/api/asesores/reassign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo actualizar la asignación");
+    advisorManageSelected = new Set();
+    $("advisorManageTarget").value = "";
+    $("advisorManageNewCodigo").value = "";
+    $("advisorManageNewNombre").value = "";
+    await loadDashboard();
+    await loadAsesoresGestion(true);
+    await loadAsesoresCatalog();
+    status(`Asignación actualizada: ${number.format(data.updated || 0)} clientes`);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $("assignSelectedAdvisor").disabled = false;
+    $("clearSelectedAdvisor").disabled = false;
+  }
 }
 
 function renderInsights() {
@@ -1297,6 +1517,7 @@ function showPage(page) {
   });
   if (page === "historial" && !importHistory.length) loadImportHistory();
   if (page === "compromisos") loadPromesas();
+  if (page === "asesores") loadAsesoresGestion();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1585,6 +1806,7 @@ async function saveAsesorForm() {
     $("asesorModal").close();
     await loadAsesoresCatalog();
     if (drawerNit === nit) openClientDrawer(nit);
+    if (currentPage === "asesores") loadAsesoresGestion(true);
     loadDashboard().catch((err) => status(err.message));
   } catch (err) {
     alert(`Error: ${err.message}`);
@@ -1609,6 +1831,7 @@ async function removeAsesorFromClient() {
     $("asesorModal").close();
     await loadAsesoresCatalog();
     if (drawerNit === nit) openClientDrawer(nit);
+    if (currentPage === "asesores") loadAsesoresGestion(true);
     loadDashboard().catch((err) => status(err.message));
   } catch (err) {
     alert(`Error: ${err.message}`);
@@ -2107,6 +2330,31 @@ $("asesorExistente").addEventListener("change", () => {
     $("asesorNuevoNombre").value = "";
   }
 });
+$("refreshAdvisorManage")?.addEventListener("click", () => loadAsesoresGestion(true));
+$("advisorManageSearch")?.addEventListener("input", () => {
+  advisorManageSearch = $("advisorManageSearch").value;
+  renderAdvisorManageClients();
+});
+$("advisorManageTarget")?.addEventListener("change", () => {
+  if ($("advisorManageTarget").value) {
+    $("advisorManageNewCodigo").value = "";
+    $("advisorManageNewNombre").value = "";
+  }
+});
+$("advisorManageNewCodigo")?.addEventListener("input", () => {
+  if ($("advisorManageNewCodigo").value || $("advisorManageNewNombre").value) $("advisorManageTarget").value = "";
+});
+$("advisorManageNewNombre")?.addEventListener("input", () => {
+  if ($("advisorManageNewCodigo").value || $("advisorManageNewNombre").value) $("advisorManageTarget").value = "";
+});
+$("advisorManageSelectAll")?.addEventListener("change", () => {
+  const visible = advisorManageFilteredClients();
+  if ($("advisorManageSelectAll").checked) visible.forEach((client) => advisorManageSelected.add(client.nit));
+  else visible.forEach((client) => advisorManageSelected.delete(client.nit));
+  renderAdvisorManageClients();
+});
+$("assignSelectedAdvisor")?.addEventListener("click", () => saveAdvisorManageSelection());
+$("clearSelectedAdvisor")?.addEventListener("click", () => saveAdvisorManageSelection("quitar"));
 $("cancelContact").addEventListener("click", () => $("contactModal").close());
 $("closeContactModal").addEventListener("click", () => $("contactModal").close());
 $("saveContact").addEventListener("click", saveContact);

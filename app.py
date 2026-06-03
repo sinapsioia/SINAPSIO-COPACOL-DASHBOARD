@@ -1331,7 +1331,21 @@ def delete_promesa(promesa_id: str) -> None:
     supabase_delete("copacol_promesas_pago", f"id=eq.{urllib.parse.quote(promesa_id)}")
 
 
-def update_client_asesor(nit: str, payload: dict) -> dict:
+def latest_completed_import_batch_id() -> str:
+    try:
+        batches = fetch_all(
+            "copacol_import_batches",
+            "id,status,imported_at",
+            "imported_at.desc",
+            page_size=5,
+        )
+        completed = [batch for batch in batches if (batch.get("status") or "").lower() == "completed"]
+        return str((completed[0] or {}).get("id") or "") if completed else ""
+    except Exception:
+        return ""
+
+
+def update_client_asesor(nit: str, payload: dict, active_batch_id: str | None = None) -> dict:
     if not nit:
         raise ValueError("NIT requerido.")
     codigo = (payload.get("asesor_codigo") or "").strip()
@@ -1345,33 +1359,154 @@ def update_client_asesor(nit: str, payload: dict) -> dict:
         if not nombre:
             raise ValueError("El nombre del asesor es obligatorio.")
         update_row = {"asesor_codigo": codigo, "asesor_nombre": nombre}
-    result = supabase_patch(
-        "copacol_clients",
-        f"nit=eq.{urllib.parse.quote(nit)}",
-        update_row,
-    )
+    active_batch_id = active_batch_id if active_batch_id is not None else latest_completed_import_batch_id()
+    result = []
+    if active_batch_id:
+        result = supabase_patch(
+            "copacol_clients",
+            f"nit=eq.{urllib.parse.quote(nit)}&import_batch_id=eq.{urllib.parse.quote(active_batch_id)}",
+            update_row,
+        )
+    if not result:
+        result = supabase_patch(
+            "copacol_clients",
+            f"nit=eq.{urllib.parse.quote(nit)}",
+            update_row,
+        )
     if not result:
         raise ValueError("Cliente no encontrado.")
     return result[0] if isinstance(result, list) else result
 
 
-def build_asesores_catalog() -> list[dict]:
-    clients = fetch_all(
-        "copacol_clients",
-        "asesor_codigo,asesor_nombre",
-        "asesor_nombre.asc",
-        page_size=2000,
-    )
-    counts: dict[str, dict] = {}
-    for client in clients:
-        codigo = (client.get("asesor_codigo") or "").strip()
-        nombre = (client.get("asesor_nombre") or "").strip()
-        if not codigo and not nombre:
+def bulk_update_client_asesor(payload: dict) -> dict:
+    nits = [str(nit).strip() for nit in (payload.get("nits") or []) if str(nit).strip()]
+    if not nits:
+        raise ValueError("Selecciona al menos un cliente.")
+    if len(nits) > 200:
+        raise ValueError("Selecciona máximo 200 clientes por operación.")
+    updated = []
+    errors = []
+    active_batch_id = latest_completed_import_batch_id()
+    for nit in nits:
+        try:
+            updated.append(update_client_asesor(nit, payload, active_batch_id))
+        except Exception as exc:
+            errors.append({"nit": nit, "error": str(exc)})
+    if errors and not updated:
+        raise ValueError(errors[0]["error"])
+    return {"updated": len(updated), "errors": errors}
+
+
+def build_asesores_management_payload() -> dict:
+    payload = build_dashboard_payload()
+    invoices = payload.get("invoices") or []
+    summary = payload.get("summary") or {}
+    clients_by_nit: dict[str, dict] = {}
+    for invoice in invoices:
+        nit = str(invoice.get("nit") or "").strip()
+        if not nit:
             continue
-        key = codigo or nombre
-        entry = counts.setdefault(key, {"asesor_codigo": codigo, "asesor_nombre": nombre, "clientes": 0})
-        entry["clientes"] += 1
-    return sorted(counts.values(), key=lambda row: (row.get("asesor_nombre") or "").upper())
+        amount_value = money(invoice.get("monto"))
+        days = money(invoice.get("dias_mora"))
+        current = clients_by_nit.setdefault(
+            nit,
+            {
+                "nit": nit,
+                "razon_social": invoice.get("cliente") or "Sin cliente",
+                "asesor_codigo": invoice.get("asesor_codigo") or "",
+                "asesor_nombre": invoice.get("asesor_nombre") or "",
+                "ciudad": invoice.get("ciudad") or "",
+                "telefono": invoice.get("telefono") or "",
+                "total_saldo": 0.0,
+                "total_vencido": 0.0,
+                "total_vigente": 0.0,
+                "num_facturas": 0,
+                "num_vencidas": 0,
+                "dias_mora_max": 0.0,
+            },
+        )
+        current["total_saldo"] += amount_value
+        current["num_facturas"] += 1
+        if days > 0:
+            current["total_vencido"] += amount_value
+            current["num_vencidas"] += 1
+            current["dias_mora_max"] = max(current["dias_mora_max"], days)
+        else:
+            current["total_vigente"] += amount_value
+
+    advisors: dict[str, dict] = {}
+    for client in clients_by_nit.values():
+        codigo = str(client.get("asesor_codigo") or "").strip()
+        nombre = str(client.get("asesor_nombre") or "").strip()
+        no_catalogado = is_uncatalogued_seller(client)
+        sin_asesor = not no_catalogado and (
+            (not codigo and not nombre)
+            or codigo.lower() == "sin_codigo"
+            or nombre.upper() == "SIN ASESOR"
+        )
+        if no_catalogado:
+            key = "__no_catalogado"
+            codigo = "0"
+            nombre = "VENDEDOR NO CATALOGADO"
+        elif sin_asesor:
+            key = "__sin_asesor"
+            nombre = "Sin asesor"
+        else:
+            key = f"{codigo}|{nombre}"
+        advisor = advisors.setdefault(
+            key,
+            {
+                "key": key,
+                "asesor_codigo": codigo,
+                "asesor_nombre": nombre,
+                "clientes": 0,
+                "saldo": 0.0,
+                "vencido": 0.0,
+                "facturas": 0,
+                "especial": no_catalogado or sin_asesor,
+                "tipo": "no_catalogado" if no_catalogado else "sin_asesor" if sin_asesor else "asesor",
+            },
+        )
+        advisor["clientes"] += 1
+        advisor["saldo"] += money(client.get("total_saldo"))
+        advisor["vencido"] += money(client.get("total_vencido"))
+        advisor["facturas"] += int(money(client.get("num_facturas")))
+        client["advisor_key"] = key
+        client["tipo_asignacion"] = advisor["tipo"]
+
+    advisors_list = sorted(
+        advisors.values(),
+        key=lambda row: (0 if row["tipo"] == "asesor" else 1, (row.get("asesor_nombre") or "").upper()),
+    )
+    catalog = [
+        {
+            "asesor_codigo": advisor.get("asesor_codigo") or "",
+            "asesor_nombre": advisor.get("asesor_nombre") or "",
+            "clientes": advisor.get("clientes") or 0,
+        }
+        for advisor in advisors_list
+        if advisor.get("tipo") == "asesor" and (advisor.get("asesor_codigo") or advisor.get("asesor_nombre"))
+    ]
+    return {
+        "summary": {
+            "import_batch_id": summary.get("import_batch_id"),
+            "fecha_corte": summary.get("fecha_corte"),
+            "asesores_activos": len(catalog),
+            "clientes": len(clients_by_nit),
+            "clientes_sin_asesor": sum(1 for client in clients_by_nit.values() if client.get("tipo_asignacion") == "sin_asesor"),
+            "clientes_no_catalogados": sum(1 for client in clients_by_nit.values() if client.get("tipo_asignacion") == "no_catalogado"),
+        },
+        "asesores": advisors_list,
+        "catalogo": catalog,
+        "clientes": sorted(
+            clients_by_nit.values(),
+            key=lambda row: (row.get("tipo_asignacion") != "sin_asesor", -(money(row.get("total_saldo")))),
+        ),
+    }
+
+
+def build_asesores_catalog() -> list[dict]:
+    return build_asesores_management_payload().get("catalogo") or []
 
 
 def build_client_payload(nit: str) -> dict:
@@ -2153,6 +2288,13 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/asesores/gestion":
+            try:
+                json_response(self, 200, build_asesores_management_payload())
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/asesores":
             try:
                 json_response(self, 200, {"asesores": build_asesores_catalog()})
@@ -2228,6 +2370,18 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                 result = upsert_promesa(data)
                 json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/asesores/reassign":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                result = bulk_update_client_asesor(data)
+                json_response(self, 200, {"status": "ok", **result})
             except ValueError as exc:
                 json_response(self, 400, {"error": str(exc)})
             except Exception as exc:

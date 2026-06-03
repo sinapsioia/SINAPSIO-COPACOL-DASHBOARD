@@ -459,6 +459,75 @@
         <section id="asesores" class="panel page" data-page="asesores">
           <div class="section-head table-head">
             <div>
+              <p class="eyebrow">Administración de carteras</p>
+              <h2>Asignación de clientes a asesores</h2>
+              <span id="advisorManageCount" class="muted">Cargando carteras activas…</span>
+            </div>
+            <button id="refreshAdvisorManage" type="button" class="download-btn">Actualizar carteras</button>
+          </div>
+          <div id="advisorManageSummary" class="promesas-kpi-strip advisor-manage-summary"></div>
+          <div class="advisor-admin-grid">
+            <article class="advisor-admin-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Carteras activas</h2>
+                  <span class="muted">Solo corte vigente en Supabase</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="advisorManageSearch">Buscar cliente</label>
+                <input id="advisorManageSearch" placeholder="Cliente, NIT, asesor o ciudad" />
+              </div>
+              <div id="advisorPortfolioList" class="advisor-portfolio-list"></div>
+            </article>
+            <article class="advisor-admin-panel wide">
+              <div class="section-head">
+                <div>
+                  <h2>Clientes de la cartera</h2>
+                  <span id="advisorManageSelection" class="muted">Selecciona clientes para reasignar</span>
+                </div>
+              </div>
+              <div class="advisor-assignment-bar">
+                <div class="form-group">
+                  <label for="advisorManageTarget">Asignar a asesor existente</label>
+                  <select id="advisorManageTarget">
+                    <option value="">Seleccionar asesor</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="advisorManageNewCodigo">O crear / asignar asesor</label>
+                  <div class="asesor-new-grid">
+                    <input id="advisorManageNewCodigo" placeholder="Código" />
+                    <input id="advisorManageNewNombre" placeholder="Nombre" />
+                  </div>
+                </div>
+                <div class="advisor-assignment-actions">
+                  <button id="assignSelectedAdvisor" type="button">Asignar seleccionados</button>
+                  <button id="clearSelectedAdvisor" type="button" class="btn-secondary">Quitar asesor</button>
+                </div>
+              </div>
+              <div class="table-wrap advisor-manage-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th><input id="advisorManageSelectAll" type="checkbox" /></th>
+                      <th>Cliente</th>
+                      <th>NIT</th>
+                      <th>Asesor actual</th>
+                      <th>Saldo</th>
+                      <th>Vencido</th>
+                      <th>Días</th>
+                      <th>Facturas</th>
+                    </tr>
+                  </thead>
+                  <tbody id="advisorManageClients"></tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+
+          <div class="section-head table-head">
+            <div>
               <h2>Cartera vencida por asesor</h2>
               <span class="muted">Detalle completo en M COP y porcentaje vencido</span>
             </div>
@@ -843,6 +912,6 @@
       </div>
     </aside>
 
-    <script src="/app.js?v=kpi-layout-polish-20260603"></script>
+    <script src="/app.js?v=advisor-portfolio-management-20260603"></script>
   </body>
 </html>
