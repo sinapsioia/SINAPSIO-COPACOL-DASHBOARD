@@ -14,6 +14,12 @@ create table if not exists public.copacol_client_advisor_overrides (
   updated_at timestamptz not null default now()
 );
 
+alter table public.copacol_client_advisor_overrides
+  enable row level security;
+
+-- No se crean políticas para anon/authenticated. El dashboard escribe desde backend
+-- con service role, que bypasses RLS. Esto evita lectura/escritura pública directa.
+
 create index if not exists copacol_client_advisor_overrides_activo_idx
   on public.copacol_client_advisor_overrides (activo);
 
