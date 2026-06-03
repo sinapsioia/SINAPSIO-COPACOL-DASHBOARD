@@ -661,11 +661,16 @@ def build_dashboard_payload() -> dict:
                 lambda row: row.get("id") or f"{row.get('nit')}::{row.get('numero_factura')}",
             )
 
+    advisor_overrides = advisor_overrides_by_nit()
+    if advisor_overrides:
+        clients = [apply_advisor_override(client, advisor_overrides) for client in clients]
+
     last_update_candidates = [
         row.get("updated_at") or row.get("created_at") or ""
         for row in [*clients, *invoices]
     ]
-    ultima_actualizacion = max([latest_batch.get("imported_at") or "", *last_update_candidates])
+    override_update_candidates = [row.get("updated_at") or "" for row in advisor_overrides.values()]
+    ultima_actualizacion = max([latest_batch.get("imported_at") or "", *last_update_candidates, *override_update_candidates])
 
     client_lookup = {client.get("nit"): client for client in clients}
     credit_lookup = {normalize_nit(term.get("nit")): term for term in credit_terms if normalize_nit(term.get("nit"))}
@@ -735,6 +740,7 @@ def build_dashboard_payload() -> dict:
                     "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
                     "cupo_credito": (credit_term or {}).get("cupo_credito"),
                     "observacion_credito": (credit_term or {}).get("observacion"),
+                    "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
                     "manual_client_override": True,
                 }
             )
@@ -794,6 +800,7 @@ def build_dashboard_payload() -> dict:
                 "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
                 "cupo_credito": (credit_term or {}).get("cupo_credito"),
                 "observacion_credito": (credit_term or {}).get("observacion"),
+                "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
             }
         )
 
@@ -1151,6 +1158,27 @@ def supabase_insert(table: str, row: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def supabase_upsert(table: str, row: dict, on_conflict: str) -> list[dict]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing Supabase configuration")
+    query = urllib.parse.urlencode({"on_conflict": on_conflict})
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query}"
+    body = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=representation",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def supabase_patch(table: str, query: str, row: dict) -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Missing Supabase configuration")
@@ -1206,6 +1234,9 @@ def build_promesas_module_payload(status: str | None = None) -> dict:
         "razon_social.asc",
         page_size=2000,
     )
+    overrides = advisor_overrides_by_nit()
+    if overrides:
+        clients = [apply_advisor_override(client, overrides) for client in clients]
     client_lookup = {client.get("nit"): client for client in clients if client.get("nit")}
     payments_by_nit: dict[str, list[dict]] = defaultdict(list)
     for payment in payments:
@@ -1345,6 +1376,57 @@ def latest_completed_import_batch_id() -> str:
         return ""
 
 
+def advisor_overrides_by_nit() -> dict[str, dict]:
+    try:
+        rows = fetch_all(
+            "copacol_client_advisor_overrides",
+            "nit,asesor_codigo,asesor_nombre,activo,motivo,updated_by,source,updated_at",
+            "updated_at.desc",
+            page_size=5000,
+        )
+    except Exception:
+        return {}
+    overrides: dict[str, dict] = {}
+    for row in rows:
+        nit = normalize_nit(row.get("nit"))
+        if not nit or row.get("activo") is False:
+            continue
+        overrides[nit] = row
+    return overrides
+
+
+def apply_advisor_override(row: dict, overrides: dict[str, dict]) -> dict:
+    nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
+    override = overrides.get(nit)
+    if not override:
+        return row
+    return {
+        **row,
+        "asesor_codigo_original": row.get("asesor_codigo") or row.get("vendedor_codigo"),
+        "asesor_nombre_original": row.get("asesor_nombre") or row.get("vendedor_nombre"),
+        "asesor_codigo": override.get("asesor_codigo"),
+        "asesor_nombre": override.get("asesor_nombre"),
+        "vendedor_codigo": override.get("asesor_codigo"),
+        "vendedor_nombre": override.get("asesor_nombre"),
+        "tiene_override_asesor": True,
+        "advisor_override_updated_at": override.get("updated_at"),
+    }
+
+
+def upsert_advisor_override(nit: str, payload: dict) -> dict:
+    row = {
+        "nit": normalize_nit(nit),
+        "asesor_codigo": payload.get("asesor_codigo"),
+        "asesor_nombre": payload.get("asesor_nombre"),
+        "activo": True,
+        "motivo": (payload.get("motivo") or "dashboard").strip() or "dashboard",
+        "updated_by": (payload.get("updated_by") or "dashboard").strip() or "dashboard",
+        "source": "dashboard",
+    }
+    result = supabase_upsert("copacol_client_advisor_overrides", row, "nit")
+    return result[0] if isinstance(result, list) and result else row
+
+
 def update_client_asesor(nit: str, payload: dict, active_batch_id: str | None = None) -> dict:
     if not nit:
         raise ValueError("NIT requerido.")
@@ -1359,6 +1441,11 @@ def update_client_asesor(nit: str, payload: dict, active_batch_id: str | None = 
         if not nombre:
             raise ValueError("El nombre del asesor es obligatorio.")
         update_row = {"asesor_codigo": codigo, "asesor_nombre": nombre}
+    advisor_override = None
+    try:
+        advisor_override = upsert_advisor_override(nit, {**payload, **update_row})
+    except Exception:
+        advisor_override = None
     active_batch_id = active_batch_id if active_batch_id is not None else latest_completed_import_batch_id()
     result = []
     if active_batch_id:
@@ -1375,7 +1462,10 @@ def update_client_asesor(nit: str, payload: dict, active_batch_id: str | None = 
         )
     if not result:
         raise ValueError("Cliente no encontrado.")
-    return result[0] if isinstance(result, list) else result
+    client_result = result[0] if isinstance(result, list) else result
+    if isinstance(client_result, dict):
+        client_result["advisor_override"] = advisor_override
+    return client_result
 
 
 def bulk_update_client_asesor(payload: dict) -> dict:
@@ -1423,8 +1513,10 @@ def build_asesores_management_payload() -> dict:
                 "num_facturas": 0,
                 "num_vencidas": 0,
                 "dias_mora_max": 0.0,
+                "tiene_override_asesor": bool(invoice.get("tiene_override_asesor")),
             },
         )
+        current["tiene_override_asesor"] = current.get("tiene_override_asesor") or bool(invoice.get("tiene_override_asesor"))
         current["total_saldo"] += amount_value
         current["num_facturas"] += 1
         if days > 0:
@@ -1516,6 +1608,9 @@ def build_client_payload(nit: str) -> dict:
         f"select=*&{params}",
     )
     client = clients[0] if clients else {}
+    overrides = advisor_overrides_by_nit()
+    if client:
+        client = apply_advisor_override(client, overrides)
 
     inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
     invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
@@ -1961,6 +2056,9 @@ def parse_xlsx(path: Path) -> dict:
         summary = payload.get("summary") or {}
         facturas_payload = payload.get("facturas") or []
         clients_payload = payload.get("clients") or []
+        advisor_overrides = advisor_overrides_by_nit()
+        if advisor_overrides:
+            clients_payload = [apply_advisor_override(row, advisor_overrides) for row in clients_payload]
         aging = summary.get("aging") or {}
         records = [
             {
@@ -2099,6 +2197,7 @@ def parse_xlsx(path: Path) -> dict:
 
     cut_date = detect_report_date(rows)
     credit_terms = credit_terms_by_nit()
+    advisor_overrides = advisor_overrides_by_nit()
 
     records = []
     by_client: dict[str, dict] = {}
@@ -2154,6 +2253,10 @@ def parse_xlsx(path: Path) -> dict:
         saldo = money(safe_cell(raw, cols["saldo"]))
         seller_code = safe_cell(raw, cols["vendedor_codigo"]) or "sin_codigo"
         seller_name = safe_cell(raw, cols["vendedor_nombre"]) or "Sin asesor"
+        override = advisor_overrides.get(nit_key)
+        if override:
+            seller_code = override.get("asesor_codigo") or ""
+            seller_name = override.get("asesor_nombre") or ""
         client_name = safe_cell(raw, cols["cliente_nombre"]) or "Sin nombre"
 
         record = {

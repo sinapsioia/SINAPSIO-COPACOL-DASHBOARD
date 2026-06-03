@@ -837,6 +837,7 @@ function renderAdvisorManageClients() {
         : client.tipo_asignacion === "no_catalogado"
           ? "Vendedor no catalogado"
           : client.asesor_nombre || "Sin asesor";
+      const manualBadge = client.tiene_override_asesor ? ' <span class="status ok">Manual</span>' : "";
       return `
         <tr>
           <td><input class="advisor-manage-check" type="checkbox" data-nit="${escapeHtml(client.nit)}" ${checked} /></td>
@@ -847,7 +848,7 @@ function renderAdvisorManageClients() {
             </div>
           </td>
           <td>${escapeHtml(client.nit || "-")}</td>
-          <td>${escapeHtml(advisor)}${client.asesor_codigo ? ` <span class="muted">(${escapeHtml(client.asesor_codigo)})</span>` : ""}</td>
+          <td>${escapeHtml(advisor)}${client.asesor_codigo ? ` <span class="muted">(${escapeHtml(client.asesor_codigo)})</span>` : ""}${manualBadge}</td>
           <td>${moneyM(client.total_saldo)}</td>
           <td>${moneyM(client.total_vencido)}</td>
           <td>${number.format(Math.round(amount(client.dias_mora_max || 0)))}</td>
