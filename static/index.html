@@ -158,9 +158,19 @@
 
           <div class="executive-grid">
             <article class="metric-card">
-              <span>Cartera general</span>
+              <span>Cartera gestionable</span>
               <strong id="kpiTotal">-</strong>
-              <small>Total documentos abiertos</small>
+              <small>Excluye vendedor no catalogado</small>
+            </article>
+            <article class="metric-card neutral">
+              <span>Cartera total importada</span>
+              <strong id="kpiImportedTotal">-</strong>
+              <small id="kpiImportedDetail">Incluye todos los documentos</small>
+            </article>
+            <article class="metric-card warning">
+              <span>Vendedor no catalogado</span>
+              <strong id="kpiUncatalogued">-</strong>
+              <small id="kpiUncataloguedDetail">Pendiente por clasificar</small>
             </article>
             <article class="metric-card danger">
               <span>Cartera vencida</span>
@@ -830,6 +840,6 @@
       </div>
     </aside>
 
-    <script src="/app.js?v=cards-net-filter-20260603"></script>
+    <script src="/app.js?v=split-cartera-no-catalogada-20260603"></script>
   </body>
 </html>

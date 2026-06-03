@@ -464,6 +464,8 @@ input[type="number"] {
 .metric-card.blue   { background: linear-gradient(145deg,#fff,var(--brand-50)); border-color: var(--brand-100); }
 .metric-card.orange { background: linear-gradient(145deg,#fff,var(--accent-50)); border-color: var(--accent-soft); }
 .metric-card.good   { background: linear-gradient(145deg,#fff,var(--success-soft)); border-color: #b7f3cb; }
+.metric-card.warning { background: linear-gradient(145deg,#fff,var(--warning-soft)); border-color: #fcd34d; }
+.metric-card.neutral { background: linear-gradient(145deg,#fff,var(--surface-2)); border-color: var(--border-2); }
 
 .mini-progress {
   height: 22px; margin-top: 10px;

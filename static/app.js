@@ -96,6 +96,12 @@ function amount(value) {
   return Number(value || 0);
 }
 
+function isUncataloguedSeller(row) {
+  const code = String(row.asesor_codigo || row.vendedor_codigo || "").trim();
+  const name = String(row.asesor_nombre || row.vendedor_nombre || "").trim().toUpperCase();
+  return code === "0" || name.includes("NO CATALOGADO");
+}
+
 function moneyM(value) {
   return `$${(amount(value) / 1000000).toLocaleString("es-CO", { maximumFractionDigits: 2 })}M`;
 }
@@ -257,6 +263,10 @@ function buildSellerAging(rows) {
 function buildView() {
   const invoices = filteredInvoices(false);
   const clients = filteredClients();
+  const managedInvoices = invoices.filter((invoice) => !isUncataloguedSeller(invoice));
+  const uncataloguedInvoices = invoices.filter(isUncataloguedSeller);
+  const managedClients = clients.filter((client) => !isUncataloguedSeller(client));
+  const uncataloguedClients = clients.filter(isUncataloguedSeller);
   const aging = emptyAging();
   const conditionMap = {};
   const dueSoon = [];
@@ -266,7 +276,7 @@ function buildView() {
   let moraSum = 0;
   let weightedDays = 0;
 
-  invoices.forEach((invoice) => {
+  managedInvoices.forEach((invoice) => {
     const rawValue = amount(invoice.monto);
     const days = amount(invoice.dias_mora);
     aging[invoice.aging_bucket] += rawValue;
@@ -284,7 +294,16 @@ function buildView() {
   });
 
   const totalSaldo = totalVencido + totalVigente;
-  const sellerRows = buildSellerAging(invoices);
+  const importedTotal = invoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
+  const importedVencido = invoices.reduce((sum, invoice) => sum + (amount(invoice.dias_mora) > 0 ? amount(invoice.monto) : 0), 0);
+  const uncataloguedTotal = uncataloguedInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
+  const uncataloguedVencido = uncataloguedInvoices.reduce((sum, invoice) => sum + (amount(invoice.dias_mora) > 0 ? amount(invoice.monto) : 0), 0);
+  const uncataloguedVigente = uncataloguedTotal - uncataloguedVencido;
+  const uncataloguedFavor = uncataloguedInvoices.reduce((sum, invoice) => {
+    const value = amount(invoice.monto);
+    return value < 0 ? sum + Math.abs(value) : sum;
+  }, 0);
+  const sellerRows = buildSellerAging(managedInvoices);
   const condition_mix = Object.entries(conditionMap)
     .map(([condicion, saldo]) => ({ condicion, saldo }))
     .sort((a, b) => b.saldo - a.saldo);
@@ -297,9 +316,9 @@ function buildView() {
     aging,
     condition_mix,
     seller_aging: sellerRows,
-    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: clients.filter((c) => c.asesor_codigo === row.codigo).length })),
+    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: managedClients.filter((c) => c.asesor_codigo === row.codigo).length })),
     cities: Object.entries(
-      clients.reduce((acc, client) => {
+      managedClients.reduce((acc, client) => {
         acc[client.ciudad || "Sin ciudad"] = (acc[client.ciudad || "Sin ciudad"] || 0) + amount(client.total_saldo);
         return acc;
       }, {}),
@@ -311,16 +330,31 @@ function buildView() {
       total_saldo: totalSaldo,
       total_vencido: totalVencido,
       total_vigente: totalVigente,
-      clientes: clients.length,
-      clientes_vencidos: clients.filter((client) => amount(client.total_vencido) > 0).length,
-      facturas: invoices.length,
+      clientes: managedClients.length,
+      clientes_vencidos: managedClients.filter((client) => amount(client.total_vencido) > 0).length,
+      facturas: managedInvoices.length,
       facturas_vencidas: facturasVencidas,
       mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
       rotacion_cartera_dias: totalSaldo ? weightedDays / totalSaldo : 0,
-      concentracion_top10: clients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
-      concentracion_top10_pct: totalSaldo ? clients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
+      concentracion_top10: managedClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
+      concentracion_top10_pct: totalSaldo ? managedClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
       over_90: aging["91_120"] + aging["121_180"] + aging["181_plus"],
       over_90_pct: totalSaldo ? (aging["91_120"] + aging["121_180"] + aging["181_plus"]) / totalSaldo : 0,
+      cartera_importada: {
+        total_saldo: importedTotal,
+        total_vencido: importedVencido,
+        total_vigente: importedTotal - importedVencido,
+        clientes: clients.length,
+        facturas: invoices.length,
+      },
+      cartera_no_catalogada: {
+        total_saldo: uncataloguedTotal,
+        total_vencido: uncataloguedVencido,
+        total_vigente: uncataloguedVigente,
+        clientes: uncataloguedClients.length,
+        facturas: uncataloguedInvoices.length,
+        saldos_a_favor: uncataloguedFavor,
+      },
     },
   };
 }
@@ -379,6 +413,16 @@ function renderDashboard() {
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", money.format(summary.total_saldo));
+  setText("kpiImportedTotal", money.format(summary.cartera_importada?.total_saldo || 0));
+  setText(
+    "kpiImportedDetail",
+    `${number.format(summary.cartera_importada?.facturas || 0)} documentos · ${number.format(summary.cartera_importada?.clientes || 0)} clientes`,
+  );
+  setText("kpiUncatalogued", money.format(summary.cartera_no_catalogada?.total_saldo || 0));
+  setText(
+    "kpiUncataloguedDetail",
+    `${number.format(summary.cartera_no_catalogada?.facturas || 0)} documentos · ${number.format(summary.cartera_no_catalogada?.clientes || 0)} clientes`,
+  );
   setText("kpiOverdue", money.format(summary.total_vencido));
   setText("kpiCurrent", money.format(summary.total_vigente));
   setText("kpiAvgMora", `${number.format(Math.round(summary.mora_promedio || 0))} días`);

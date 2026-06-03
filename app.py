@@ -287,6 +287,12 @@ def aging_overdue_total(aging: dict) -> float:
     return sum(money(aging.get(key)) for key in OVERDUE_AGING_KEYS)
 
 
+def is_uncatalogued_seller(row: dict) -> bool:
+    code = str(row.get("asesor_codigo") or row.get("vendedor_codigo") or "").strip()
+    name = str(row.get("asesor_nombre") or row.get("vendedor_nombre") or "").strip().upper()
+    return code == "0" or "NO CATALOGADO" in name
+
+
 def allowed_siigo_account(value: str) -> bool:
     digits = re.sub(r"\D+", "", str(value or ""))
     if not digits:
@@ -883,10 +889,79 @@ def build_dashboard_payload() -> dict:
             }
         )
 
-    top_clients = sorted(enriched_clients, key=lambda c: money(c.get("total_saldo")), reverse=True)
-    top_sellers = sorted(by_seller.values(), key=lambda s: s["saldo"], reverse=True)
+    managed_invoices = [row for row in enriched_invoices if not is_uncatalogued_seller(row)]
+    uncatalogued_invoices = [row for row in enriched_invoices if is_uncatalogued_seller(row)]
+    managed_clients = [client for client in enriched_clients if not is_uncatalogued_seller(client)]
+    uncatalogued_clients = [client for client in enriched_clients if is_uncatalogued_seller(client)]
+
+    def summarize_invoice_rows(rows: list[dict]) -> dict:
+        scoped_aging = empty_aging()
+        scoped_condition_mix: dict[str, float] = defaultdict(float)
+        scoped_total_vencido = 0.0
+        scoped_total_vigente = 0.0
+        scoped_facturas_vencidas = 0
+        scoped_mora_sum = 0.0
+        scoped_weighted_days = 0.0
+        scoped_saldos_a_favor = 0.0
+        for invoice in rows:
+            invoice_amount = money(invoice.get("monto"))
+            days = money(invoice.get("dias_mora"))
+            bucket = invoice.get("aging_bucket") or aging_bucket(days)
+            scoped_aging[bucket] += invoice_amount
+            condition_key = (
+                "saldos_a_favor"
+                if invoice_amount < 0
+                else invoice.get("condicion_pago_real") or invoice.get("condicion_pago") or "sin_condicion_real"
+            )
+            scoped_condition_mix[condition_key] += invoice_amount
+            if invoice_amount < 0:
+                scoped_saldos_a_favor += abs(invoice_amount)
+            if days > 0:
+                scoped_total_vencido += invoice_amount
+                scoped_facturas_vencidas += 1
+                scoped_mora_sum += days
+            else:
+                scoped_total_vigente += invoice_amount
+            scoped_weighted_days += max(days, 0.0) * max(invoice_amount, 0.0)
+        scoped_total_saldo = scoped_total_vencido + scoped_total_vigente
+        scoped_over_90 = scoped_aging["91_120"] + scoped_aging["121_180"] + scoped_aging["181_plus"]
+        return {
+            "aging": scoped_aging,
+            "condition_mix": scoped_condition_mix,
+            "total_saldo": scoped_total_saldo,
+            "total_vencido": scoped_total_vencido,
+            "total_vigente": scoped_total_vigente,
+            "facturas": len(rows),
+            "facturas_vencidas": scoped_facturas_vencidas,
+            "mora_promedio": scoped_mora_sum / scoped_facturas_vencidas if scoped_facturas_vencidas else 0.0,
+            "rotacion_cartera_dias": scoped_weighted_days / scoped_total_saldo if scoped_total_saldo else 0.0,
+            "saldos_a_favor": scoped_saldos_a_favor,
+            "over_90": scoped_over_90,
+            "over_90_pct": scoped_over_90 / scoped_total_saldo if scoped_total_saldo else 0.0,
+        }
+
+    managed_scope = summarize_invoice_rows(managed_invoices)
+    imported_scope = summarize_invoice_rows(enriched_invoices)
+    uncatalogued_scope = summarize_invoice_rows(uncatalogued_invoices)
+    aging = managed_scope["aging"]
+    condition_mix = managed_scope["condition_mix"]
+    total_saldo = managed_scope["total_saldo"]
+    total_vencido = managed_scope["total_vencido"]
+    total_vigente = managed_scope["total_vigente"]
+    saldos_a_favor = managed_scope["saldos_a_favor"]
+    avg_mora_vencida = managed_scope["mora_promedio"]
+    rotacion_cartera_dias = managed_scope["rotacion_cartera_dias"]
+    vencidos = sum(1 for client in managed_clients if money(client.get("total_vencido")) > 0)
+    top_clients = sorted(managed_clients, key=lambda c: money(c.get("total_saldo")), reverse=True)
+    top_sellers = sorted(
+        [seller for seller in by_seller.values() if not is_uncatalogued_seller({"asesor_codigo": seller.get("codigo"), "asesor_nombre": seller.get("nombre")})],
+        key=lambda s: s["saldo"],
+        reverse=True,
+    )
     seller_matrix_rows = []
     for row in seller_aging.values():
+        if is_uncatalogued_seller({"asesor_codigo": row.get("codigo"), "asesor_nombre": row.get("nombre")}):
+            continue
         row["pct_vencido"] = row["vencido"] / row["total"] if row["total"] else 0.0
         seller_matrix_rows.append(row)
     seller_matrix_rows = sorted(seller_matrix_rows, key=lambda row: row["total"], reverse=True)
@@ -896,12 +971,12 @@ def build_dashboard_payload() -> dict:
         reverse=True,
     )[:12]
     overdue_invoices = sorted(
-        [row for row in enriched_invoices if money(row.get("dias_mora")) > 0],
+        [row for row in managed_invoices if money(row.get("dias_mora")) > 0],
         key=lambda row: (money(row.get("dias_mora")), money(row.get("monto"))),
         reverse=True,
     )
     due_soon = sorted(
-        [row for row in enriched_invoices if -7 <= money(row.get("dias_mora")) <= 0],
+        [row for row in managed_invoices if -7 <= money(row.get("dias_mora")) <= 0],
         key=lambda row: money(row.get("dias_mora")),
         reverse=True,
     )
@@ -914,7 +989,7 @@ def build_dashboard_payload() -> dict:
     prior_batch_id = import_batches[1].get("id") if len(import_batches) > 1 else None
     clientes_deterioro = build_clientes_deterioro(enriched_clients, prior_batch_id)
     promesas_resumen = build_promesas_resumen(promises, payments)
-    overdue_clients_list = [client for client in enriched_clients if money(client.get("total_vencido")) > 0]
+    overdue_clients_list = [client for client in managed_clients if money(client.get("total_vencido")) > 0]
     gestion_cobertura = build_gestion_cobertura(overdue_clients_list, log_contactos)
 
     return {
@@ -925,10 +1000,10 @@ def build_dashboard_payload() -> dict:
             "saldos_a_favor": saldos_a_favor,
             "total_vencido": total_vencido,
             "total_vigente": total_vigente,
-            "clientes": len(clients),
+            "clientes": len(managed_clients),
             "clientes_vencidos": vencidos,
-            "facturas": len(invoices),
-            "facturas_vencidas": len(overdue_invoices),
+            "facturas": managed_scope["facturas"],
+            "facturas_vencidas": managed_scope["facturas_vencidas"],
             "mora_promedio": avg_mora_vencida,
             "rotacion_cartera_dias": rotacion_cartera_dias,
             "concentracion_top10": concentration_top10,
@@ -949,6 +1024,21 @@ def build_dashboard_payload() -> dict:
             "import_batch_id": active_batch_id,
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
             "terceros_credito": len(credit_terms),
+            "cartera_importada": {
+                "total_saldo": imported_scope["total_saldo"],
+                "total_vencido": imported_scope["total_vencido"],
+                "total_vigente": imported_scope["total_vigente"],
+                "clientes": len(enriched_clients),
+                "facturas": imported_scope["facturas"],
+            },
+            "cartera_no_catalogada": {
+                "total_saldo": uncatalogued_scope["total_saldo"],
+                "total_vencido": uncatalogued_scope["total_vencido"],
+                "total_vigente": uncatalogued_scope["total_vigente"],
+                "clientes": len(uncatalogued_clients),
+                "facturas": uncatalogued_scope["facturas"],
+                "saldos_a_favor": uncatalogued_scope["saldos_a_favor"],
+            },
         },
         "aging": aging,
         "condition_mix": [{"condicion": key, "saldo": value} for key, value in sorted(condition_mix.items(), key=lambda item: item[1], reverse=True)],
