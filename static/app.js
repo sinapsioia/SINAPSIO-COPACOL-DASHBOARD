@@ -106,6 +106,11 @@ function moneyM(value) {
   return `$${(amount(value) / 1000000).toLocaleString("es-CO", { maximumFractionDigits: 2 })}M`;
 }
 
+function docsClientsDetail(facturas, clientes) {
+  const docsText = `${number.format(facturas || 0)} documentos`;
+  return clientes ? `${docsText} · ${number.format(clientes)} clientes` : docsText;
+}
+
 function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -416,12 +421,12 @@ function renderDashboard() {
   setText("kpiImportedTotal", money.format(summary.cartera_importada?.total_saldo || 0));
   setText(
     "kpiImportedDetail",
-    `${number.format(summary.cartera_importada?.facturas || 0)} documentos · ${number.format(summary.cartera_importada?.clientes || 0)} clientes`,
+    docsClientsDetail(summary.cartera_importada?.facturas, summary.cartera_importada?.clientes),
   );
   setText("kpiUncatalogued", money.format(summary.cartera_no_catalogada?.total_saldo || 0));
   setText(
     "kpiUncataloguedDetail",
-    `${number.format(summary.cartera_no_catalogada?.facturas || 0)} documentos · ${number.format(summary.cartera_no_catalogada?.clientes || 0)} clientes`,
+    `${docsClientsDetail(summary.cartera_no_catalogada?.facturas, summary.cartera_no_catalogada?.clientes)} pendientes`,
   );
   setText("kpiOverdue", money.format(summary.total_vencido));
   setText("kpiCurrent", money.format(summary.total_vigente));
@@ -458,7 +463,7 @@ function renderDashboard() {
     light.classList.toggle("active", light.dataset.light === semaforo.key);
   });
   setText("kpiRotation", `${number.format(Math.round(summary.rotacion_cartera_dias || 0))} días`);
-  setText("kpiRotationDetail", "Promedio ponderado sobre toda la cartera");
+  setText("kpiRotationDetail", "Promedio ponderado sobre cartera gestionable");
   const promesasResumen = dashboard.promesas_resumen || {};
   const gestionCobertura = dashboard.gestion_cobertura || {};
   const deterioroRows = dashboard.clientes_deterioro || [];

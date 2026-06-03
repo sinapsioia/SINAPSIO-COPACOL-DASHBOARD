@@ -396,7 +396,10 @@ input[type="number"] {
 .board-grid,
 .goal-strip { display: grid; gap: 14px; }
 .board-header { grid-template-columns: minmax(0,1fr) auto; align-items: center; }
-.executive-grid { grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); }
+.executive-grid {
+  grid-template-columns: repeat(12, minmax(0,1fr));
+  align-items: stretch;
+}
 
 .semaforo-panel {
   grid-template-columns: minmax(0,1fr) auto;
@@ -436,29 +439,44 @@ input[type="number"] {
 .semaforo-lights i[data-light="red"].active { background: var(--danger); opacity: 1; }
 
 .metric-card {
-  min-height: 124px;
+  grid-column: span 2;
+  min-width: 0;
+  min-height: 132px;
   padding: 18px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-1);
   transition: transform 200ms, box-shadow 200ms;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
 }
+.metric-card.kpi-large { grid-column: span 3; }
 .metric-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 .metric-card span {
   font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3);
+  line-height: 1.45;
 }
 .metric-card strong {
-  display: block; margin-top: 10px;
+  display: block;
   font-family: var(--font-display);
-  font-size: 26px; font-weight: 500;
-  letter-spacing: -0.02em; color: var(--ink-1);
+  font-size: clamp(21px, 1.45vw, 27px);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.05;
+  color: var(--ink-1);
+  white-space: nowrap;
+  max-width: 100%;
 }
 .metric-card small {
-  display: block; margin-top: 8px;
-  color: var(--ink-3); font-size: 12px;
+  display: block;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .metric-card.danger { background: linear-gradient(145deg,#fff,var(--danger-soft)); border-color: #fbbdba; }
 .metric-card.blue   { background: linear-gradient(145deg,#fff,var(--brand-50)); border-color: var(--brand-100); }
@@ -468,7 +486,8 @@ input[type="number"] {
 .metric-card.neutral { background: linear-gradient(145deg,#fff,var(--surface-2)); border-color: var(--border-2); }
 
 .mini-progress {
-  height: 22px; margin-top: 10px;
+  height: 18px;
+  width: 100%;
   background: var(--danger-soft); border-radius: 6px; overflow: hidden;
 }
 .mini-progress i { display: block; width: 0; height: 100%; background: var(--accent); }
@@ -1684,6 +1703,9 @@ input[type="file"] {
   .executive-grid, .board-grid, .goal-strip {
     grid-template-columns: 1fr 1fr;
   }
+  .executive-grid { grid-template-columns: repeat(6, minmax(0,1fr)); }
+  .metric-card { grid-column: span 2; }
+  .metric-card.kpi-large { grid-column: span 3; }
   .insight-panel, .insight-panel.large,
   .insight-panel:not(.large), .insight-panel:has(.risk-map) { grid-column: auto; }
   .filter-group.wide { grid-column: 1 / -1; }
@@ -1710,6 +1732,9 @@ input[type="file"] {
   .import-kpis article { border-right: 0; border-bottom: 1px solid var(--border); }
   .import-kpis article:last-child { border-bottom: 0; }
   .executive-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .metric-card { grid-column: span 1; }
+  .metric-card.kpi-large { grid-column: span 2; }
+  .metric-card strong { font-size: 23px; }
   .donut-row { justify-items: center; }
   .donut.big { width: min(180px,70vw); height: min(180px,70vw); }
   .column-chart, .effort-chart {
@@ -1722,4 +1747,10 @@ input[type="file"] {
   .section-head, .table-head { align-items: flex-start; flex-direction: column; }
   .import-change-control, .change-grid { grid-template-columns: 1fr; }
   .history-grid, .history-metrics { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .executive-grid { grid-template-columns: 1fr; }
+  .metric-card,
+  .metric-card.kpi-large { grid-column: 1 / -1; }
 }
