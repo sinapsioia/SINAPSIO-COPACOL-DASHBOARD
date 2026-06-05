@@ -199,9 +199,16 @@ function activeFilters() {
   return {
     term: $("globalSearch").value.trim().toLowerCase(),
     seller: $("sellerFilter").value,
+    account: $("accountFilter")?.value || mainCarteraAccount,
     aging: $("agingFilter").value,
     minAmount: Number($("minAmount").value || 0),
   };
+}
+
+function selectedOperationalAccounts(filters = activeFilters()) {
+  if (filters.account === "all") return totalCarteraAccounts;
+  if (totalCarteraAccounts.has(filters.account)) return new Set([filters.account]);
+  return new Set([mainCarteraAccount]);
 }
 
 function matchesText(row, term) {
@@ -212,36 +219,44 @@ function matchesText(row, term) {
     .includes(term);
 }
 
-function filteredInvoices(useMode = true) {
+function filteredInvoices(useMode = true, includeAccount = true) {
   const filters = activeFilters();
   let rows = dashboard.invoices;
   if (useMode && tableMode === "overdue") rows = dashboard.overdue_invoices;
   if (useMode && tableMode === "soon") rows = dashboard.due_soon;
+  const accountSet = selectedOperationalAccounts(filters);
 
   return rows.filter((row) => {
     const sellerOk = filters.seller === "all" || row.asesor_codigo === filters.seller;
+    const accountOk = !includeAccount || accountMatches(row, accountSet, !siigoAccount(row));
     const agingOk = filters.aging === "all" || row.aging_bucket === filters.aging;
     const amountOk = filters.minAmount <= 0 || amount(row.monto) >= filters.minAmount;
-    return sellerOk && agingOk && amountOk && matchesText(row, filters.term);
+    return sellerOk && accountOk && agingOk && amountOk && matchesText(row, filters.term);
   });
 }
 
-function filteredClients() {
+function clientMatchesFilters(client, filters) {
+  const sellerOk = filters.seller === "all" || client.asesor_codigo === filters.seller;
+  const amountOk = filters.minAmount <= 0 || amount(client.total_saldo) >= filters.minAmount;
+  const textOk =
+    !filters.term ||
+    [client.nit, client.razon_social, client.asesor_nombre, client.ciudad, client.telefono]
+      .join(" ")
+      .toLowerCase()
+      .includes(filters.term);
+  const clientBucket = agingBucketFromDays(amount(client.dias_mora_max), amount(client.total_vencido));
+  const agingOk = filters.aging === "all" || clientBucket === filters.aging;
+  const noGestionOk = !clientNoGestionMode || isNoGestion5d(client);
+  return sellerOk && amountOk && textOk && agingOk && noGestionOk;
+}
+
+function filteredClients(includeAccount = true) {
   const filters = activeFilters();
-  return dashboard.clients.filter((client) => {
-    const sellerOk = filters.seller === "all" || client.asesor_codigo === filters.seller;
-    const amountOk = filters.minAmount <= 0 || amount(client.total_saldo) >= filters.minAmount;
-    const textOk =
-      !filters.term ||
-      [client.nit, client.razon_social, client.asesor_nombre, client.ciudad, client.telefono]
-        .join(" ")
-        .toLowerCase()
-        .includes(filters.term);
-    const clientBucket = agingBucketFromDays(amount(client.dias_mora_max), amount(client.total_vencido));
-    const agingOk = filters.aging === "all" || clientBucket === filters.aging;
-    const noGestionOk = !clientNoGestionMode || isNoGestion5d(client);
-    return sellerOk && amountOk && textOk && agingOk && noGestionOk;
-  });
+  if (includeAccount) {
+    const scopedRows = filteredInvoices(false, true);
+    return clientsFromInvoiceScope(scopedRows, dashboard.clients).filter((client) => clientMatchesFilters(client, filters));
+  }
+  return dashboard.clients.filter((client) => clientMatchesFilters(client, filters));
 }
 
 function isNoGestion5d(client) {
@@ -329,11 +344,13 @@ function clientsFromInvoiceScope(rows, baseClients) {
 }
 
 function buildView() {
-  const invoices = filteredInvoices(false);
-  const clients = filteredClients();
+  const filters = activeFilters();
+  const invoices = filteredInvoices(false, false);
+  const clients = filteredClients(false);
   const hasSiigoAccounts = invoices.some((invoice) => siigoAccount(invoice));
+  const operationalAccountSet = selectedOperationalAccounts(filters);
   const principalInvoices = invoices.filter((invoice) => accountMatches(invoice, totalCarteraAccounts, !hasSiigoAccounts));
-  const operationalInvoices = invoices.filter((invoice) => accountMatches(invoice, new Set([mainCarteraAccount]), !hasSiigoAccounts));
+  const operationalInvoices = invoices.filter((invoice) => accountMatches(invoice, operationalAccountSet, !hasSiigoAccounts));
   const principalClients = clientsFromInvoiceScope(principalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
   const operationalClients = clientsFromInvoiceScope(operationalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
   const aging = emptyAging();
@@ -374,10 +391,10 @@ function buildView() {
     .sort((a, b) => b.saldo - a.saldo);
 
   return {
-    invoices,
-    clients,
+    invoices: operationalInvoices,
+    clients: operationalClients,
     due_soon: dueSoon,
-    overdue_invoices: invoices.filter((invoice) => amount(invoice.dias_mora) > 0),
+    overdue_invoices: operationalInvoices.filter((invoice) => amount(invoice.dias_mora) > 0),
     aging,
     condition_mix,
     seller_aging: sellerRows,
@@ -394,10 +411,10 @@ function buildView() {
       ...dashboard.summary,
       total_saldo: totalSaldo,
       total_vencido: totalVencido,
-      total_vigente: totalSaldo - totalVencido,
-      clientes: principalClients.length,
+      total_vigente: operationalVigente,
+      clientes: operationalClients.length,
       clientes_vencidos: operationalClients.filter((client) => amount(client.total_vencido) > 0).length,
-      facturas: principalInvoices.length,
+      facturas: operationalInvoices.length,
       facturas_vencidas: facturasVencidas,
       mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
       rotacion_cartera_dias: operationalTotal ? weightedDays / operationalTotal : 0,
@@ -407,6 +424,7 @@ function buildView() {
       over_90_pct: operationalTotal ? (aging["91_120"] + aging["121_180"] + aging["181_plus"]) / operationalTotal : 0,
       saldos_a_favor: saldosFavorOperativos,
       cartera_operativa: {
+        cuenta_filtro: filters.account,
         total_saldo: operationalTotal,
         total_vencido: totalVencido,
         total_vigente: operationalVigente,
@@ -460,13 +478,13 @@ function renderDashboard() {
   dashboard.view = buildView();
   const view = dashboard.view;
   const summary = view.summary;
-  const overdueRatio = summary.total_saldo ? summary.total_vencido / summary.total_saldo : 0;
+  const operationalTotal = amount(summary.cartera_operativa?.total_saldo) || summary.total_saldo;
+  const overdueRatio = operationalTotal ? summary.total_vencido / operationalTotal : 0;
   const credito60 = conditionValue("credito_60d");
   const credito45 = conditionValue("credito_45d");
   const platam30 = conditionValue("platam_30d");
   const platam60 = conditionValue("platam_60d");
   const contado = conditionValue("contado");
-  const operationalTotal = amount(summary.cartera_operativa?.total_saldo) || summary.total_saldo;
   const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionValue("saldos_a_favor"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
@@ -2297,11 +2315,13 @@ async function confirmImport() {
 $("refreshBtn").addEventListener("click", () => loadDashboard().catch((error) => status(error.message)));
 $("globalSearch").addEventListener("input", rerenderFilteredViews);
 $("sellerFilter").addEventListener("change", rerenderFilteredViews);
+$("accountFilter").addEventListener("change", rerenderFilteredViews);
 $("agingFilter").addEventListener("change", rerenderFilteredViews);
 $("minAmount").addEventListener("input", rerenderFilteredViews);
 $("clearFilters").addEventListener("click", () => {
   $("globalSearch").value = "";
   $("sellerFilter").value = "all";
+  $("accountFilter").value = mainCarteraAccount;
   $("agingFilter").value = "all";
   $("minAmount").value = "";
   clientNoGestionMode = false;
