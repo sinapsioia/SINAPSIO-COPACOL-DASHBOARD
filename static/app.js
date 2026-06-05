@@ -44,6 +44,8 @@ const agingLabels = {
 
 const agingKeys = Object.keys(agingLabels);
 const overdueAgingKeys = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"];
+const mainCarteraAccount = "1305050100";
+const totalCarteraAccounts = new Set(["1305050100", "1305052200"]);
 
 function emptyAging() {
   return Object.fromEntries(agingKeys.map((key) => [key, 0]));
@@ -104,6 +106,16 @@ function isUncataloguedSeller(row) {
   const code = String(row.asesor_codigo || row.vendedor_codigo || "").trim();
   const name = String(row.asesor_nombre || row.vendedor_nombre || "").trim().toUpperCase();
   return code === "0" || name.includes("NO CATALOGADO");
+}
+
+function siigoAccount(row) {
+  return String(row.cuenta_siigo || row.cuenta || "").replace(/\D/g, "");
+}
+
+function accountMatches(row, accounts, includeMissing = false) {
+  const account = siigoAccount(row);
+  if (!account) return includeMissing;
+  return accounts.has(account);
 }
 
 function moneyM(value) {
@@ -258,6 +270,7 @@ function agingBucketFromDays(days, overdueAmount = 1) {
 function buildSellerAging(rows) {
   const grouped = {};
   rows.forEach((invoice) => {
+    if (isUncataloguedSeller(invoice)) return;
     const code = invoice.asesor_codigo || "sin_codigo";
     const row = grouped[code] || {
       codigo: code,
@@ -278,23 +291,61 @@ function buildSellerAging(rows) {
     .sort((a, b) => b.total - a.total);
 }
 
+function clientsFromInvoiceScope(rows, baseClients) {
+  const baseByNit = new Map(baseClients.map((client) => [String(client.nit || "").replace(/\D/g, ""), client]));
+  const grouped = new Map();
+  rows.forEach((invoice) => {
+    const nitKey = String(invoice.nit || "").replace(/\D/g, "");
+    if (!nitKey) return;
+    const current = grouped.get(nitKey) || { saldo: 0, vencido: 0, vigente: 0, facturas: 0, vencidas: 0, dias: [] };
+    const rawValue = amount(invoice.monto);
+    const days = amount(invoice.dias_mora);
+    current.saldo += rawValue;
+    current.facturas += 1;
+    current.dias.push(days);
+    if (days > 0) {
+      current.vencido += rawValue;
+      current.vencidas += 1;
+    } else {
+      current.vigente += rawValue;
+    }
+    grouped.set(nitKey, current);
+  });
+
+  return Array.from(grouped.entries()).map(([nitKey, values]) => {
+    const base = baseByNit.get(nitKey) || { nit: nitKey, razon_social: "Sin cliente" };
+    const positiveDays = values.dias.filter((day) => day > 0);
+    const diasMax = positiveDays.length ? Math.max(...positiveDays) : Math.max(...values.dias, 0);
+    return {
+      ...base,
+      total_saldo: values.saldo,
+      total_vencido: values.vencido,
+      total_vigente: values.vigente,
+      num_facturas: values.facturas,
+      num_vencidas: values.vencidas,
+      dias_mora_max: diasMax,
+    };
+  });
+}
+
 function buildView() {
   const invoices = filteredInvoices(false);
   const clients = filteredClients();
-  const managedInvoices = invoices.filter((invoice) => !isUncataloguedSeller(invoice));
-  const uncataloguedInvoices = invoices.filter(isUncataloguedSeller);
-  const managedClients = clients.filter((client) => !isUncataloguedSeller(client));
-  const uncataloguedClients = clients.filter(isUncataloguedSeller);
+  const hasSiigoAccounts = invoices.some((invoice) => siigoAccount(invoice));
+  const principalInvoices = invoices.filter((invoice) => accountMatches(invoice, totalCarteraAccounts, !hasSiigoAccounts));
+  const operationalInvoices = invoices.filter((invoice) => accountMatches(invoice, new Set([mainCarteraAccount]), !hasSiigoAccounts));
+  const principalClients = clientsFromInvoiceScope(principalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
+  const operationalClients = clientsFromInvoiceScope(operationalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
   const aging = emptyAging();
   const conditionMap = {};
   const dueSoon = [];
   let totalVencido = 0;
-  let totalVigente = 0;
+  let operationalVigente = 0;
   let facturasVencidas = 0;
   let moraSum = 0;
   let weightedDays = 0;
 
-  managedInvoices.forEach((invoice) => {
+  operationalInvoices.forEach((invoice) => {
     const rawValue = amount(invoice.monto);
     const days = amount(invoice.dias_mora);
     aging[invoice.aging_bucket] += rawValue;
@@ -306,22 +357,18 @@ function buildView() {
       facturasVencidas += 1;
       moraSum += days;
     } else {
-      totalVigente += rawValue;
+      operationalVigente += rawValue;
       if (days >= -7) dueSoon.push(invoice);
     }
   });
 
-  const totalSaldo = totalVencido + totalVigente;
-  const importedTotal = invoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
-  const importedVencido = invoices.reduce((sum, invoice) => sum + (amount(invoice.dias_mora) > 0 ? amount(invoice.monto) : 0), 0);
-  const uncataloguedTotal = uncataloguedInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
-  const uncataloguedVencido = uncataloguedInvoices.reduce((sum, invoice) => sum + (amount(invoice.dias_mora) > 0 ? amount(invoice.monto) : 0), 0);
-  const uncataloguedVigente = uncataloguedTotal - uncataloguedVencido;
-  const uncataloguedFavor = uncataloguedInvoices.reduce((sum, invoice) => {
+  const totalSaldo = principalInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
+  const operationalTotal = operationalInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
+  const saldosFavorOperativos = operationalInvoices.reduce((sum, invoice) => {
     const value = amount(invoice.monto);
     return value < 0 ? sum + Math.abs(value) : sum;
   }, 0);
-  const sellerRows = buildSellerAging(managedInvoices);
+  const sellerRows = buildSellerAging(operationalInvoices);
   const condition_mix = Object.entries(conditionMap)
     .map(([condicion, saldo]) => ({ condicion, saldo }))
     .sort((a, b) => b.saldo - a.saldo);
@@ -334,9 +381,9 @@ function buildView() {
     aging,
     condition_mix,
     seller_aging: sellerRows,
-    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: managedClients.filter((c) => c.asesor_codigo === row.codigo).length })),
+    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: operationalClients.filter((c) => c.asesor_codigo === row.codigo).length })),
     cities: Object.entries(
-      managedClients.reduce((acc, client) => {
+      principalClients.reduce((acc, client) => {
         acc[client.ciudad || "Sin ciudad"] = (acc[client.ciudad || "Sin ciudad"] || 0) + amount(client.total_saldo);
         return acc;
       }, {}),
@@ -347,31 +394,25 @@ function buildView() {
       ...dashboard.summary,
       total_saldo: totalSaldo,
       total_vencido: totalVencido,
-      total_vigente: totalVigente,
-      clientes: managedClients.length,
-      clientes_vencidos: managedClients.filter((client) => amount(client.total_vencido) > 0).length,
-      facturas: managedInvoices.length,
+      total_vigente: totalSaldo - totalVencido,
+      clientes: principalClients.length,
+      clientes_vencidos: operationalClients.filter((client) => amount(client.total_vencido) > 0).length,
+      facturas: principalInvoices.length,
       facturas_vencidas: facturasVencidas,
       mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
-      rotacion_cartera_dias: totalSaldo ? weightedDays / totalSaldo : 0,
-      concentracion_top10: managedClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
-      concentracion_top10_pct: totalSaldo ? managedClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
+      rotacion_cartera_dias: operationalTotal ? weightedDays / operationalTotal : 0,
+      concentracion_top10: principalClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
+      concentracion_top10_pct: totalSaldo ? principalClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
       over_90: aging["91_120"] + aging["121_180"] + aging["181_plus"],
-      over_90_pct: totalSaldo ? (aging["91_120"] + aging["121_180"] + aging["181_plus"]) / totalSaldo : 0,
-      cartera_importada: {
-        total_saldo: importedTotal,
-        total_vencido: importedVencido,
-        total_vigente: importedTotal - importedVencido,
-        clientes: clients.length,
-        facturas: invoices.length,
-      },
-      cartera_no_catalogada: {
-        total_saldo: uncataloguedTotal,
-        total_vencido: uncataloguedVencido,
-        total_vigente: uncataloguedVigente,
-        clientes: uncataloguedClients.length,
-        facturas: uncataloguedInvoices.length,
-        saldos_a_favor: uncataloguedFavor,
+      over_90_pct: operationalTotal ? (aging["91_120"] + aging["121_180"] + aging["181_plus"]) / operationalTotal : 0,
+      saldos_a_favor: saldosFavorOperativos,
+      cartera_operativa: {
+        total_saldo: operationalTotal,
+        total_vencido: totalVencido,
+        total_vigente: operationalVigente,
+        clientes: operationalClients.length,
+        facturas: operationalInvoices.length,
+        saldos_a_favor: saldosFavorOperativos,
       },
     },
   };
@@ -425,22 +466,13 @@ function renderDashboard() {
   const platam30 = conditionValue("platam_30d");
   const platam60 = conditionValue("platam_60d");
   const contado = conditionValue("contado");
+  const operationalTotal = amount(summary.cartera_operativa?.total_saldo) || summary.total_saldo;
   const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionValue("saldos_a_favor"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", money.format(summary.total_saldo));
-  setText("kpiImportedTotal", money.format(summary.cartera_importada?.total_saldo || 0));
-  setText(
-    "kpiImportedDetail",
-    docsClientsDetail(summary.cartera_importada?.facturas, summary.cartera_importada?.clientes),
-  );
-  setText("kpiUncatalogued", money.format(summary.cartera_no_catalogada?.total_saldo || 0));
-  setText(
-    "kpiUncataloguedDetail",
-    `${docsClientsDetail(summary.cartera_no_catalogada?.facturas, summary.cartera_no_catalogada?.clientes)} pendientes`,
-  );
   setText("kpiOverdue", money.format(summary.total_vencido));
   setText("kpiCurrent", money.format(summary.total_vigente));
   setText("kpiAvgMora", `${number.format(Math.round(summary.mora_promedio || 0))} días`);
@@ -452,15 +484,15 @@ function renderDashboard() {
   setText("overduePctCard", pct.format(overdueRatio));
   setText("overduePctHero", pct.format(overdueRatio));
   setText("kpiCredito60", moneyM(credito60));
-  setText("kpiCredito60Pct", pct.format(credito60 / summary.total_saldo || 0));
+  setText("kpiCredito60Pct", pct.format(credito60 / operationalTotal || 0));
   setText("kpiCredito45", moneyM(credito45));
-  setText("kpiCredito45Pct", pct.format(credito45 / summary.total_saldo || 0));
+  setText("kpiCredito45Pct", pct.format(credito45 / operationalTotal || 0));
   setText("kpiPlatam30", moneyM(platam30));
-  setText("kpiPlatam30Pct", pct.format(platam30 / summary.total_saldo || 0));
+  setText("kpiPlatam30Pct", pct.format(platam30 / operationalTotal || 0));
   setText("kpiPlatam60", moneyM(platam60));
-  setText("kpiPlatam60Pct", pct.format(platam60 / summary.total_saldo || 0));
+  setText("kpiPlatam60Pct", pct.format(platam60 / operationalTotal || 0));
   setText("kpiContado", moneyM(contado));
-  setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyM(saldosFavor)}` : pct.format(contado / summary.total_saldo || 0));
+  setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyM(saldosFavor)}` : pct.format(contado / operationalTotal || 0));
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
   setText("kpiNoGestion5d", number.format(dashboard.clients.filter(isNoGestion5d).length));
@@ -1473,7 +1505,7 @@ function renderImportPreview(result) {
       <article><span>Clientes</span><strong>${number.format(result.clientes || 0)}</strong></article>
       <article><span>Vendedores</span><strong>${number.format(result.vendedores || 0)}</strong></article>
       <article><span>Plazo real</span><strong>${number.format(realTermInvoices)} docs</strong><small>${number.format(fallbackInvoices)} fallback</small></article>
-      <article><span>Cuentas Siigo</span><strong>13050501 / 13050522</strong><small>Únicas cuentas consideradas</small></article>
+      <article><span>Cuentas Siigo</span><strong>1305050100 / 1305052200</strong><small>Únicas cuentas consideradas</small></article>
     </div>
     ${changeControl}
     <div class="import-preview-grid">

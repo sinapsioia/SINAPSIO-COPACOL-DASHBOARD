@@ -72,7 +72,8 @@ AGING_KEYS = [
     "181_plus",
 ]
 OVERDUE_AGING_KEYS = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"]
-ALLOWED_SIIGO_ACCOUNT_PREFIXES = ("13050501", "13050522")
+MAIN_CARTERA_ACCOUNT = "1305050100"
+TOTAL_CARTERA_ACCOUNTS = {"1305050100", "1305052200"}
 CITY_LABELS = {
     "154": "Cali",
     "813": "Tumaco",
@@ -305,8 +306,23 @@ def is_uncatalogued_seller(row: dict) -> bool:
 def allowed_siigo_account(value: str) -> bool:
     digits = re.sub(r"\D+", "", str(value or ""))
     if not digits:
-        return True
-    return digits.startswith(ALLOWED_SIIGO_ACCOUNT_PREFIXES)
+        return False
+    return digits in TOTAL_CARTERA_ACCOUNTS
+
+
+def siigo_account(value: str | None) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+def invoice_account(row: dict) -> str:
+    return siigo_account(row.get("cuenta_siigo") or row.get("cuenta"))
+
+
+def account_matches(row: dict, accounts: set[str], *, include_missing: bool = False) -> bool:
+    account = invoice_account(row)
+    if not account:
+        return include_missing
+    return account in accounts
 
 
 def city_label(value: str | None) -> str:
@@ -578,11 +594,19 @@ def build_dashboard_payload() -> dict:
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
     )
-    invoices = fetch_all(
-        "copacol_facturas",
-        "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
-        "fecha_vencimiento.asc",
-    )
+    invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at"
+    try:
+        invoices = fetch_all(
+            "copacol_facturas",
+            invoice_select,
+            "fecha_vencimiento.asc",
+        )
+    except Exception:
+        invoices = fetch_all(
+            "copacol_facturas",
+            "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
+            "fecha_vencimiento.asc",
+        )
     promises = fetch_all(
         "copacol_promesas_pago",
         "nit,telefono,fecha_promesa,monto_prometido,observacion,status,registrado_por,created_at",
@@ -905,11 +929,6 @@ def build_dashboard_payload() -> dict:
             }
         )
 
-    managed_invoices = [row for row in enriched_invoices if not is_uncatalogued_seller(row)]
-    uncatalogued_invoices = [row for row in enriched_invoices if is_uncatalogued_seller(row)]
-    managed_clients = [client for client in enriched_clients if not is_uncatalogued_seller(client)]
-    uncatalogued_clients = [client for client in enriched_clients if is_uncatalogued_seller(client)]
-
     def summarize_invoice_rows(rows: list[dict]) -> dict:
         scoped_aging = empty_aging()
         scoped_condition_mix: dict[str, float] = defaultdict(float)
@@ -956,43 +975,162 @@ def build_dashboard_payload() -> dict:
             "over_90_pct": scoped_over_90 / scoped_total_saldo if scoped_total_saldo else 0.0,
         }
 
-    managed_scope = summarize_invoice_rows(managed_invoices)
-    imported_scope = summarize_invoice_rows(enriched_invoices)
-    uncatalogued_scope = summarize_invoice_rows(uncatalogued_invoices)
-    aging = managed_scope["aging"]
-    condition_mix = managed_scope["condition_mix"]
-    total_saldo = managed_scope["total_saldo"]
-    total_vencido = managed_scope["total_vencido"]
-    total_vigente = managed_scope["total_vigente"]
-    saldos_a_favor = managed_scope["saldos_a_favor"]
-    avg_mora_vencida = managed_scope["mora_promedio"]
-    rotacion_cartera_dias = managed_scope["rotacion_cartera_dias"]
-    vencidos = sum(1 for client in managed_clients if money(client.get("total_vencido")) > 0)
-    top_clients = sorted(managed_clients, key=lambda c: money(c.get("total_saldo")), reverse=True)
-    top_sellers = sorted(
-        [seller for seller in by_seller.values() if not is_uncatalogued_seller({"asesor_codigo": seller.get("codigo"), "asesor_nombre": seller.get("nombre")})],
-        key=lambda s: s["saldo"],
-        reverse=True,
-    )
-    seller_matrix_rows = []
-    for row in seller_aging.values():
-        if is_uncatalogued_seller({"asesor_codigo": row.get("codigo"), "asesor_nombre": row.get("nombre")}):
-            continue
-        row["pct_vencido"] = row["vencido"] / row["total"] if row["total"] else 0.0
-        seller_matrix_rows.append(row)
-    seller_matrix_rows = sorted(seller_matrix_rows, key=lambda row: row["total"], reverse=True)
+    def clients_from_invoice_scope(rows: list[dict]) -> list[dict]:
+        stats: dict[str, dict] = defaultdict(
+            lambda: {
+                "saldo": 0.0,
+                "vencido": 0.0,
+                "vigente": 0.0,
+                "facturas": 0,
+                "vencidas": 0,
+                "dias": [],
+            }
+        )
+        base_by_nit = {normalize_nit(client.get("nit")): client for client in enriched_clients if normalize_nit(client.get("nit"))}
+        for invoice in rows:
+            nit_key = normalize_nit(invoice.get("nit"))
+            if not nit_key:
+                continue
+            invoice_amount = money(invoice.get("monto"))
+            days = money(invoice.get("dias_mora"))
+            stats[nit_key]["saldo"] += invoice_amount
+            stats[nit_key]["facturas"] += 1
+            stats[nit_key]["dias"].append(days)
+            if days > 0:
+                stats[nit_key]["vencido"] += invoice_amount
+                stats[nit_key]["vencidas"] += 1
+            else:
+                stats[nit_key]["vigente"] += invoice_amount
+
+        scoped_clients = []
+        for nit_key, values in stats.items():
+            base = base_by_nit.get(nit_key, {"nit": nit_key, "razon_social": "Sin cliente"})
+            days_values = values["dias"] or [0]
+            positive_days = [day for day in days_values if day > 0]
+            dias_max = max(positive_days) if positive_days else max(days_values)
+            vencido = money(values["vencido"])
+            if dias_max > 60 or vencido > 15000000:
+                priority = "Alta"
+            elif dias_max > 30 or vencido > 5000000:
+                priority = "Media"
+            else:
+                priority = "Normal"
+            scoped_clients.append(
+                {
+                    **base,
+                    "total_saldo": money(values["saldo"]),
+                    "total_vencido": vencido,
+                    "total_vigente": money(values["vigente"]),
+                    "num_facturas": int(values["facturas"]),
+                    "num_vencidas": int(values["vencidas"]),
+                    "dias_mora_max": dias_max,
+                    "prioridad": priority,
+                }
+            )
+        return scoped_clients
+
+    def build_seller_rows(rows: list[dict]) -> list[dict]:
+        grouped: dict[str, dict] = {}
+        client_sets: dict[str, set[str]] = defaultdict(set)
+        for invoice in rows:
+            if is_uncatalogued_seller(invoice):
+                continue
+            seller_code = invoice.get("asesor_codigo") or "sin_codigo"
+            seller_name = invoice.get("asesor_nombre") or "Sin asesor"
+            row = grouped.setdefault(
+                seller_code,
+                {
+                    "codigo": seller_code,
+                    "nombre": seller_name,
+                    "total": 0.0,
+                    "vencido": 0.0,
+                    "vigente": 0.0,
+                    "por_vencer_8": 0.0,
+                    "1_4": 0.0,
+                    "5_15": 0.0,
+                    "16_30": 0.0,
+                    "31_60": 0.0,
+                    "61_90": 0.0,
+                    "91_120": 0.0,
+                    "121_180": 0.0,
+                    "181_plus": 0.0,
+                    "pct_vencido": 0.0,
+                    "clientes": 0,
+                },
+            )
+            invoice_amount = money(invoice.get("monto"))
+            days = money(invoice.get("dias_mora"))
+            bucket = invoice.get("aging_bucket") or aging_bucket(days)
+            row["total"] += invoice_amount
+            row[bucket] += invoice_amount
+            if days > 0:
+                row["vencido"] += invoice_amount
+            nit_key = normalize_nit(invoice.get("nit"))
+            if nit_key:
+                client_sets[seller_code].add(nit_key)
+        rows_out = []
+        for seller_code, row in grouped.items():
+            row["clientes"] = len(client_sets[seller_code])
+            row["pct_vencido"] = row["vencido"] / row["total"] if row["total"] else 0.0
+            rows_out.append(row)
+        return sorted(rows_out, key=lambda row: row["total"], reverse=True)
+
+    has_siigo_accounts = any(invoice_account(row) for row in enriched_invoices)
+    principal_invoices = [
+        row for row in enriched_invoices
+        if account_matches(row, TOTAL_CARTERA_ACCOUNTS, include_missing=not has_siigo_accounts)
+    ]
+    operational_invoices = [
+        row for row in enriched_invoices
+        if account_matches(row, {MAIN_CARTERA_ACCOUNT}, include_missing=not has_siigo_accounts)
+    ]
+    principal_scope = summarize_invoice_rows(principal_invoices)
+    operational_scope = summarize_invoice_rows(operational_invoices)
+    principal_clients = clients_from_invoice_scope(principal_invoices)
+    operational_clients = clients_from_invoice_scope(operational_invoices)
+
+    aging = operational_scope["aging"]
+    condition_mix = operational_scope["condition_mix"]
+    total_saldo = principal_scope["total_saldo"]
+    total_vencido = operational_scope["total_vencido"]
+    total_vigente = total_saldo - total_vencido
+    saldos_a_favor = operational_scope["saldos_a_favor"]
+    avg_mora_vencida = operational_scope["mora_promedio"]
+    rotacion_cartera_dias = operational_scope["rotacion_cartera_dias"]
+    vencidos = sum(1 for client in operational_clients if money(client.get("total_vencido")) > 0)
+    top_clients = sorted(principal_clients, key=lambda c: money(c.get("total_saldo")), reverse=True)
+    seller_matrix_rows = build_seller_rows(operational_invoices)
+    top_sellers = [
+        {
+            "codigo": row.get("codigo"),
+            "nombre": row.get("nombre"),
+            "saldo": row.get("total"),
+            "vencido": row.get("vencido"),
+            "clientes": row.get("clientes"),
+        }
+        for row in seller_matrix_rows
+    ]
     top_cities = sorted(
-        [{"ciudad": key, "saldo": value} for key, value in by_city.items()],
+        [
+            {"ciudad": city, "saldo": saldo}
+            for city, saldo in defaultdict(
+                float,
+                {
+                    city: sum(money(client.get("total_saldo")) for client in principal_clients if city_label(client.get("ciudad")) == city)
+                    for city in {city_label(client.get("ciudad")) for client in principal_clients}
+                },
+            ).items()
+        ],
         key=lambda item: item["saldo"],
         reverse=True,
     )[:12]
     overdue_invoices = sorted(
-        [row for row in managed_invoices if money(row.get("dias_mora")) > 0],
+        [row for row in operational_invoices if money(row.get("dias_mora")) > 0],
         key=lambda row: (money(row.get("dias_mora")), money(row.get("monto"))),
         reverse=True,
     )
     due_soon = sorted(
-        [row for row in managed_invoices if -7 <= money(row.get("dias_mora")) <= 0],
+        [row for row in operational_invoices if -7 <= money(row.get("dias_mora")) <= 0],
         key=lambda row: money(row.get("dias_mora")),
         reverse=True,
     )
@@ -1005,7 +1143,7 @@ def build_dashboard_payload() -> dict:
     prior_batch_id = import_batches[1].get("id") if len(import_batches) > 1 else None
     clientes_deterioro = build_clientes_deterioro(enriched_clients, prior_batch_id)
     promesas_resumen = build_promesas_resumen(promises, payments)
-    overdue_clients_list = [client for client in managed_clients if money(client.get("total_vencido")) > 0]
+    overdue_clients_list = [client for client in operational_clients if money(client.get("total_vencido")) > 0]
     gestion_cobertura = build_gestion_cobertura(overdue_clients_list, log_contactos)
 
     return {
@@ -1016,10 +1154,10 @@ def build_dashboard_payload() -> dict:
             "saldos_a_favor": saldos_a_favor,
             "total_vencido": total_vencido,
             "total_vigente": total_vigente,
-            "clientes": len(managed_clients),
+            "clientes": len(principal_clients),
             "clientes_vencidos": vencidos,
-            "facturas": managed_scope["facturas"],
-            "facturas_vencidas": managed_scope["facturas_vencidas"],
+            "facturas": principal_scope["facturas"],
+            "facturas_vencidas": operational_scope["facturas_vencidas"],
             "mora_promedio": avg_mora_vencida,
             "rotacion_cartera_dias": rotacion_cartera_dias,
             "concentracion_top10": concentration_top10,
@@ -1040,20 +1178,18 @@ def build_dashboard_payload() -> dict:
             "import_batch_id": active_batch_id,
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
             "terceros_credito": len(credit_terms),
-            "cartera_importada": {
-                "total_saldo": imported_scope["total_saldo"],
-                "total_vencido": imported_scope["total_vencido"],
-                "total_vigente": imported_scope["total_vigente"],
-                "clientes": len(enriched_clients),
-                "facturas": imported_scope["facturas"],
+            "cuentas_siigo": {
+                "cartera_principal": sorted(TOTAL_CARTERA_ACCOUNTS),
+                "cartera_operativa": MAIN_CARTERA_ACCOUNT,
+                "con_cuenta_siigo": has_siigo_accounts,
             },
-            "cartera_no_catalogada": {
-                "total_saldo": uncatalogued_scope["total_saldo"],
-                "total_vencido": uncatalogued_scope["total_vencido"],
-                "total_vigente": uncatalogued_scope["total_vigente"],
-                "clientes": len(uncatalogued_clients),
-                "facturas": uncatalogued_scope["facturas"],
-                "saldos_a_favor": uncatalogued_scope["saldos_a_favor"],
+            "cartera_operativa": {
+                "total_saldo": operational_scope["total_saldo"],
+                "total_vencido": operational_scope["total_vencido"],
+                "total_vigente": operational_scope["total_vigente"],
+                "clientes": len(operational_clients),
+                "facturas": operational_scope["facturas"],
+                "saldos_a_favor": operational_scope["saldos_a_favor"],
             },
         },
         "aging": aging,
