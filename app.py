@@ -325,6 +325,23 @@ def account_matches(row: dict, accounts: set[str], *, include_missing: bool = Fa
     return account in accounts
 
 
+def invoice_seller(invoice: dict, client: dict | None = None) -> tuple[str, str]:
+    client = client or {}
+    code = (
+        invoice.get("asesor_codigo")
+        or invoice.get("vendedor_codigo")
+        or client.get("asesor_codigo")
+        or "sin_codigo"
+    )
+    name = (
+        invoice.get("asesor_nombre")
+        or invoice.get("vendedor_nombre")
+        or client.get("asesor_nombre")
+        or "Sin asesor"
+    )
+    return str(code).strip() or "sin_codigo", str(name).strip() or "Sin asesor"
+
+
 def city_label(value: str | None) -> str:
     code = str(value or "").strip()
     if not code:
@@ -594,7 +611,7 @@ def build_dashboard_payload() -> dict:
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
     )
-    invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at"
+    invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,asesor_codigo,asesor_nombre,import_batch_id,created_at,updated_at"
     try:
         invoices = fetch_all(
             "copacol_facturas",
@@ -602,11 +619,18 @@ def build_dashboard_payload() -> dict:
             "fecha_vencimiento.asc",
         )
     except Exception:
-        invoices = fetch_all(
-            "copacol_facturas",
-            "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
-            "fecha_vencimiento.asc",
-        )
+        try:
+            invoices = fetch_all(
+                "copacol_facturas",
+                "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at",
+                "fecha_vencimiento.asc",
+            )
+        except Exception:
+            invoices = fetch_all(
+                "copacol_facturas",
+                "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
+                "fecha_vencimiento.asc",
+            )
     promises = fetch_all(
         "copacol_promesas_pago",
         "nit,telefono,fecha_promesa,monto_prometido,observacion,status,registrado_por,created_at",
@@ -750,13 +774,14 @@ def build_dashboard_payload() -> dict:
             condition_key = "saldos_a_favor"
         days = money(invoice.get("dias_mora"))
         nit = invoice.get("nit")
+        invoice_seller_code, invoice_seller_name = invoice_seller(invoice, client)
         if nit in client_total_overrides:
             enriched_invoices.append(
                 {
                     **invoice,
                     "cliente": client.get("razon_social") or "Sin cliente",
-                    "asesor_codigo": client.get("asesor_codigo") or "sin_codigo",
-                    "asesor_nombre": client.get("asesor_nombre") or "Sin asesor",
+                    "asesor_codigo": invoice_seller_code,
+                    "asesor_nombre": invoice_seller_name,
                     "ciudad": city_label(client.get("ciudad")),
                     "telefono": client.get("telefono") or client.get("telefono_2") or "",
                     "aging_bucket": aging_bucket(days),
@@ -770,8 +795,8 @@ def build_dashboard_payload() -> dict:
             )
             continue
         bucket = aging_bucket(days)
-        seller_code = client.get("asesor_codigo") or "sin_codigo"
-        seller_name = client.get("asesor_nombre") or "Sin asesor"
+        seller_code = invoice_seller_code
+        seller_name = invoice_seller_name
         seller_matrix = seller_aging.setdefault(
             seller_code,
             {
@@ -2199,8 +2224,8 @@ def parse_xlsx(path: Path) -> dict:
         records = [
             {
                 "ciudad": "",
-                "vendedor_codigo": "",
-                "vendedor_nombre": "",
+                "vendedor_codigo": row.get("asesor_codigo") or row.get("vendedor_codigo") or "",
+                "vendedor_nombre": row.get("asesor_nombre") or row.get("vendedor_nombre") or "",
                 "cliente_nit": row.get("nit"),
                 "cliente_nombre": "",
                 "telefono_1": "",
@@ -2237,9 +2262,11 @@ def parse_xlsx(path: Path) -> dict:
             if row.get("nit")
         }
         by_seller: dict[str, float] = defaultdict(float)
-        for row in clients_payload:
-            key = f"{row.get('asesor_codigo') or 'sin_codigo'} - {row.get('asesor_nombre') or 'Sin asesor'}"
-            by_seller[key] += money(row.get("total_saldo"))
+        for row in facturas_payload:
+            code = row.get("asesor_codigo") or row.get("vendedor_codigo") or "sin_codigo"
+            name = row.get("asesor_nombre") or row.get("vendedor_nombre") or "Sin asesor"
+            key = f"{code} - {name}"
+            by_seller[key] += money(row.get("monto"))
         import_token = str(uuid.uuid4())
         fecha_corte = payload.get("report_date") or summary.get("fecha_corte")
         IMPORT_CACHE[import_token] = {
@@ -2389,10 +2416,6 @@ def parse_xlsx(path: Path) -> dict:
         saldo = money(safe_cell(raw, cols["saldo"]))
         seller_code = safe_cell(raw, cols["vendedor_codigo"]) or "sin_codigo"
         seller_name = safe_cell(raw, cols["vendedor_nombre"]) or "Sin asesor"
-        override = advisor_overrides.get(nit_key)
-        if override:
-            seller_code = override.get("asesor_codigo") or ""
-            seller_name = override.get("asesor_nombre") or ""
         client_name = safe_cell(raw, cols["cliente_nombre"]) or "Sin nombre"
 
         record = {
