@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from io import BytesIO
 from collections import defaultdict
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -104,6 +105,16 @@ def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict | 
     body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
+    no_cache_headers(handler)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def binary_response(handler: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str, filename: str) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}")
     no_cache_headers(handler)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
@@ -340,6 +351,283 @@ def invoice_seller(invoice: dict, client: dict | None = None) -> tuple[str, str]
         or "Sin asesor"
     )
     return str(code).strip() or "sin_codigo", str(name).strip() or "Sin asesor"
+
+
+def export_condition_label(invoice: dict) -> str:
+    key = str(invoice.get("condicion_pago_real") or "").strip().lower()
+    labels = {
+        "credito_45d": "45 DIAS",
+        "credito_60d": "60 DIAS",
+        "credito_otro": "CREDITO",
+        "contado": "CONTADO",
+        "platam_30d": "PLATAM 30 DIAS",
+        "platam_60d": "PLATAM 60 DIAS",
+        "saldos_a_favor": "SALDO A FAVOR",
+        "sin_condicion_real": "SIN CONDICION REAL",
+        "sin_condicion": "SIN CONDICION",
+    }
+    if key in labels:
+        return labels[key]
+    raw = str(invoice.get("condicion_pago") or key or "").strip()
+    return raw.upper() if raw else "SIN CONDICION"
+
+
+def export_aging_range(days: float, bucket: str | None = None) -> tuple[str, int]:
+    if days <= 0:
+        return "RANGO PROXIMA A VENCER", 0
+    if days <= 30:
+        return "RANGO DE 1 A 30 DIAS", 1
+    if days <= 60:
+        return "RANGO 31 A 60 DIAS", 2
+    if days <= 90:
+        return "RANGO 61 A 90 DIAS", 3
+    if days <= 120:
+        return "RANGO 91 A 120 DIAS", 4
+    if days <= 180:
+        return "RANGO 121 A 180 DIAS", 5
+    return "RANGO MAS DE 181 DIAS", 6
+
+
+def export_filters_from_query(query: str) -> dict:
+    params = urllib.parse.parse_qs(query)
+    min_amount_raw = (params.get("minAmount") or params.get("min_amount") or ["0"])[0]
+    try:
+        min_amount = float(min_amount_raw or 0)
+    except ValueError:
+        min_amount = 0
+    return {
+        "term": (params.get("term", [""])[0] or "").strip().lower(),
+        "seller": (params.get("seller", ["all"])[0] or "all").strip(),
+        "account": (params.get("account", [MAIN_CARTERA_ACCOUNT])[0] or MAIN_CARTERA_ACCOUNT).strip(),
+        "aging": (params.get("aging", ["all"])[0] or "all").strip(),
+        "mode": (params.get("mode", ["all"])[0] or "all").strip().lower(),
+        "minAmount": min_amount,
+    }
+
+
+def export_account_set(account_filter: str) -> set[str]:
+    if account_filter == "all":
+        return set(TOTAL_CARTERA_ACCOUNTS)
+    if account_filter in TOTAL_CARTERA_ACCOUNTS:
+        return {account_filter}
+    return {MAIN_CARTERA_ACCOUNT}
+
+
+def export_invoice_matches(invoice: dict, filters: dict, has_siigo_accounts: bool) -> bool:
+    days = money(invoice.get("dias_mora"))
+    if filters["mode"] == "overdue" and days <= 0:
+        return False
+    if filters["mode"] == "soon" and not (-7 <= days <= 0):
+        return False
+    if filters["seller"] != "all" and str(invoice.get("asesor_codigo") or "") != filters["seller"]:
+        return False
+    if not account_matches(invoice, export_account_set(filters["account"]), include_missing=not has_siigo_accounts):
+        return False
+    if filters["aging"] != "all" and (invoice.get("aging_bucket") or aging_bucket(days)) != filters["aging"]:
+        return False
+    if filters["minAmount"] > 0 and money(invoice.get("monto")) < filters["minAmount"]:
+        return False
+    term = filters["term"]
+    if term:
+        haystack = " ".join(
+            str(invoice.get(key) or "")
+            for key in ["cliente", "nit", "numero_factura", "asesor_nombre", "ciudad", "estado"]
+        ).lower()
+        if term not in haystack:
+            return False
+    return not is_uncatalogued_seller(invoice)
+
+
+def safe_sheet_title(value: str, used: set[str]) -> str:
+    cleaned = re.sub(r"[\[\]\:\*\?\/\\]", " ", value).strip() or "Asesor"
+    base = re.sub(r"\s+", " ", cleaned)[:31].strip() or "Asesor"
+    title = base
+    counter = 2
+    while title in used:
+        suffix = f" {counter}"
+        title = f"{base[:31 - len(suffix)]}{suffix}".strip()
+        counter += 1
+    used.add(title)
+    return title
+
+
+def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    payload = build_dashboard_payload()
+    filters = export_filters_from_query(query)
+    all_invoices = payload.get("invoices") or []
+    has_siigo_accounts = any(invoice_account(row) for row in all_invoices)
+    invoices = [
+        row for row in all_invoices
+        if export_invoice_matches(row, filters, has_siigo_accounts)
+    ]
+    invoices.sort(
+        key=lambda row: (
+            str(row.get("asesor_nombre") or "").upper(),
+            export_aging_range(money(row.get("dias_mora")), row.get("aging_bucket"))[1],
+            money(row.get("dias_mora")),
+            str(row.get("fecha_vencimiento") or ""),
+            money(row.get("monto")),
+        )
+    )
+
+    grouped: dict[str, dict] = {}
+    for invoice in invoices:
+        code = str(invoice.get("asesor_codigo") or "sin_codigo").strip() or "sin_codigo"
+        name = str(invoice.get("asesor_nombre") or "Sin asesor").strip() or "Sin asesor"
+        item = grouped.setdefault(
+            code,
+            {"codigo": code, "nombre": name, "facturas": [], "clientes": set(), "total": 0.0},
+        )
+        item["facturas"].append(invoice)
+        nit_key = normalize_nit(invoice.get("nit"))
+        if nit_key:
+            item["clientes"].add(nit_key)
+        item["total"] += money(invoice.get("monto"))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Resumen"
+    green = PatternFill("solid", fgColor="92D050")
+    blue = PatternFill("solid", fgColor="9BC2E6")
+    pale_green = PatternFill("solid", fgColor="E2F0D9")
+    pale_orange = PatternFill("solid", fgColor="FCE4D6")
+    red_font = Font(color="C00000", bold=True)
+    title_font = Font(bold=True, size=13)
+    header_font = Font(bold=True)
+    thin = Side(style="thin", color="808080")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    money_fmt = '$ #,##0.00'
+    columns = ["DESC", "VENDED", "NIT", "NOMBRE", "TEL_1", "TEL_2", "DOCUMENTO", "FECHA", "VENCE", "DIAS", "SALDO", "CONDICION", "CUENTA"]
+
+    fecha_corte = (payload.get("summary") or {}).get("fecha_corte") or datetime.now().strftime("%Y-%m-%d")
+    ws["A1"] = "COPACOL - Reporte de cartera por asesor"
+    ws["A1"].font = Font(bold=True, size=15)
+    summary_rows = [
+        ("Fecha de corte", fecha_corte),
+        ("Generado", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("Cuenta contable", filters["account"]),
+        ("Vendedor", filters["seller"]),
+        ("Edad", filters["aging"]),
+        ("Modo", filters["mode"]),
+        ("Busqueda", filters["term"] or "Todas"),
+        ("Saldo minimo", filters["minAmount"]),
+        ("Excluye vendedor no catalogado", "Si"),
+        ("Facturas exportadas", len(invoices)),
+        ("Clientes exportados", len({normalize_nit(row.get("nit")) for row in invoices if normalize_nit(row.get("nit"))})),
+        ("Total exportado", sum(money(row.get("monto")) for row in invoices)),
+    ]
+    for idx, (label, value) in enumerate(summary_rows, start=3):
+        ws.cell(idx, 1, label).font = header_font
+        ws.cell(idx, 2, value)
+        if label in {"Saldo minimo", "Total exportado"}:
+            ws.cell(idx, 2).number_format = money_fmt
+
+    table_start = len(summary_rows) + 5
+    ws.cell(table_start, 1, "Asesor").fill = blue
+    ws.cell(table_start, 2, "Codigo").fill = blue
+    ws.cell(table_start, 3, "Clientes").fill = blue
+    ws.cell(table_start, 4, "Facturas").fill = blue
+    ws.cell(table_start, 5, "Total").fill = blue
+    for col in range(1, 6):
+        ws.cell(table_start, col).font = header_font
+        ws.cell(table_start, col).border = border
+    advisors = sorted(grouped.values(), key=lambda row: row["total"], reverse=True)
+    for row_idx, advisor in enumerate(advisors, start=table_start + 1):
+        values = [advisor["nombre"], advisor["codigo"], len(advisor["clientes"]), len(advisor["facturas"]), advisor["total"]]
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row_idx, col_idx, value)
+            cell.border = border
+            if col_idx == 5:
+                cell.number_format = money_fmt
+    ws.freeze_panes = "A3"
+    widths = [34, 14, 12, 12, 18]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    used_titles = {ws.title}
+    for advisor in advisors:
+        sheet_title = safe_sheet_title(f"{advisor['codigo']} {advisor['nombre']}", used_titles)
+        sheet = wb.create_sheet(sheet_title)
+        sheet["A1"] = f"COPACOL - Cartera por asesor: {advisor['nombre']}"
+        sheet["A1"].font = title_font
+        sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
+        sheet.freeze_panes = "A4"
+        current_row = 3
+        ranges: dict[int, dict] = {}
+        for invoice in advisor["facturas"]:
+            range_label, order = export_aging_range(money(invoice.get("dias_mora")), invoice.get("aging_bucket"))
+            ranges.setdefault(order, {"label": range_label, "rows": []})["rows"].append(invoice)
+        for order in range(7):
+            block = ranges.get(order)
+            if not block:
+                continue
+            sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(columns))
+            title_cell = sheet.cell(current_row, 1, block["label"])
+            title_cell.fill = green
+            title_cell.font = header_font
+            title_cell.alignment = Alignment(horizontal="center")
+            current_row += 1
+            for col_idx, header in enumerate(columns, start=1):
+                cell = sheet.cell(current_row, col_idx, header)
+                cell.fill = blue
+                cell.font = header_font
+                cell.border = border
+            current_row += 1
+            section_total = 0.0
+            for invoice in sorted(block["rows"], key=lambda row: (money(row.get("dias_mora")), str(row.get("fecha_vencimiento") or ""))):
+                row_fill = pale_green if money(invoice.get("dias_mora")) <= 30 else pale_orange if money(invoice.get("dias_mora")) >= 61 else None
+                values = [
+                    invoice.get("ciudad") or "",
+                    invoice.get("asesor_codigo") or "",
+                    invoice.get("nit") or "",
+                    invoice.get("cliente") or "",
+                    invoice.get("telefono") or "",
+                    invoice.get("telefono_2") or "",
+                    invoice.get("numero_factura") or "",
+                    invoice.get("fecha_emision") or "",
+                    invoice.get("fecha_vencimiento") or "",
+                    money(invoice.get("dias_mora")),
+                    money(invoice.get("monto")),
+                    export_condition_label(invoice),
+                    invoice_account(invoice) or "",
+                ]
+                section_total += money(invoice.get("monto"))
+                for col_idx, value in enumerate(values, start=1):
+                    cell = sheet.cell(current_row, col_idx, value)
+                    cell.border = border
+                    if row_fill:
+                        cell.fill = row_fill
+                    if col_idx == 11:
+                        cell.number_format = money_fmt
+                    if col_idx in {2, 3, 7, 10, 13}:
+                        cell.alignment = Alignment(horizontal="right")
+                current_row += 1
+            sheet.cell(current_row, 10, "TOTAL RANGO").font = header_font
+            total_cell = sheet.cell(current_row, 11, section_total)
+            total_cell.font = red_font
+            total_cell.number_format = money_fmt
+            current_row += 2
+        sheet.cell(current_row, 10, "TOTAL ASESOR").font = header_font
+        total_cell = sheet.cell(current_row, 11, advisor["total"])
+        total_cell.font = red_font
+        total_cell.number_format = money_fmt
+        for idx, width in enumerate([16, 10, 16, 34, 16, 16, 18, 13, 13, 9, 16, 18, 14], start=1):
+            sheet.column_dimensions[get_column_letter(idx)].width = width
+
+    output = BytesIO()
+    wb.save(output)
+    filename = f"cartera-asesores-copacol-{fecha_corte}.xlsx"
+    meta = {
+        "fecha_corte": fecha_corte,
+        "facturas": len(invoices),
+        "asesores": len(advisors),
+        "total": sum(money(row.get("monto")) for row in invoices),
+    }
+    return output.getvalue(), filename, meta
 
 
 def city_label(value: str | None) -> str:
@@ -784,6 +1072,7 @@ def build_dashboard_payload() -> dict:
                     "asesor_nombre": invoice_seller_name,
                     "ciudad": city_label(client.get("ciudad")),
                     "telefono": client.get("telefono") or client.get("telefono_2") or "",
+                    "telefono_2": client.get("telefono_2") or "",
                     "aging_bucket": aging_bucket(days),
                     "condicion_pago_real": condition_key,
                     "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
@@ -844,6 +1133,7 @@ def build_dashboard_payload() -> dict:
                 "asesor_nombre": seller_name,
                 "ciudad": city_label(client.get("ciudad")),
                 "telefono": client.get("telefono") or client.get("telefono_2") or "",
+                "telefono_2": client.get("telefono_2") or "",
                 "aging_bucket": bucket,
                 "condicion_pago_real": condition_key,
                 "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
@@ -2530,6 +2820,20 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/dashboard":
             try:
                 json_response(self, 200, build_dashboard_payload())
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/export/cartera-asesores.xlsx":
+            try:
+                workbook, filename, _meta = build_advisor_export_workbook(parsed.query)
+                binary_response(
+                    self,
+                    200,
+                    workbook,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    filename,
+                )
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
             return

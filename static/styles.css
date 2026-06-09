@@ -1085,6 +1085,10 @@ tbody tr:hover td { background: var(--surface-2); }
   padding: 10px 14px;
   font-weight: 700;
 }
+.download-btn:disabled {
+  opacity: .68;
+  cursor: wait;
+}
 #noGestion5dBtn.active {
   background: var(--accent);
   border-color: var(--accent);

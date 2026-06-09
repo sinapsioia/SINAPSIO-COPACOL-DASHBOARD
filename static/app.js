@@ -2247,37 +2247,45 @@ async function saveContact() {
   }
 }
 
-function downloadVisibleInvoices() {
-  const rows = filteredInvoices().sort((a, b) => amount(b.dias_mora) - amount(a.dias_mora) || amount(b.monto) - amount(a.monto));
-  const headers = ["Cliente", "NIT", "Factura", "Vendedor", "Ciudad", "Vence", "Dias", "Saldo", "Estado", "Condicion"];
-  const csvRows = [
-    headers,
-    ...rows.map((invoice) => [
-      invoice.cliente || "",
-      invoice.nit || "",
-      invoice.numero_factura || "",
-      invoice.asesor_nombre || "",
-      invoice.ciudad || "",
-      invoice.fecha_vencimiento || "",
-      amount(invoice.dias_mora),
-      amount(invoice.monto),
-      invoice.estado || "",
-      conditionLabel(invoice.condicion_pago_real || invoice.condicion_pago),
-    ]),
-  ];
-  const csv = csvRows
-    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  const suffix = new Date().toISOString().slice(0, 10);
-  link.href = url;
-  link.download = `cartera-copacol-${suffix}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+async function downloadVisibleInvoices() {
+  const button = $("downloadInvoicesBtn");
+  const filters = activeFilters();
+  const params = new URLSearchParams({
+    term: filters.term,
+    seller: filters.seller,
+    account: filters.account,
+    aging: filters.aging,
+    minAmount: String(filters.minAmount || 0),
+    mode: tableMode,
+  });
+  try {
+    button.disabled = true;
+    button.textContent = "Generando Excel…";
+    const response = await fetch(`/api/export/cartera-asesores.xlsx?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "No se pudo generar el Excel");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)/);
+    const fallback = `cartera-asesores-copacol-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : fallback;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    status(`Excel descargado ${new Date().toLocaleTimeString("es-CO")}`);
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Descargar Excel";
+  }
 }
 
 // ── Import confirm ────────────────────────────────────────────────────────────
