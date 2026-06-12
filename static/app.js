@@ -284,6 +284,7 @@ function agingBucketFromDays(days, overdueAmount = 1) {
 
 function buildSellerAging(rows) {
   const grouped = {};
+  const clientSets = {};
   rows.forEach((invoice) => {
     if (isUncataloguedSeller(invoice)) return;
     const code = invoice.asesor_codigo || "sin_codigo";
@@ -294,15 +295,25 @@ function buildSellerAging(rows) {
       vencido: 0,
       ...emptyAging(),
       pct_vencido: 0,
+      clientes: 0,
     };
     const rawValue = amount(invoice.monto);
     row.total += rawValue;
     row[invoice.aging_bucket] += rawValue;
     if (amount(invoice.dias_mora) > 0) row.vencido += rawValue;
     grouped[code] = row;
+    const nitKey = String(invoice.nit || "").replace(/\D/g, "");
+    if (nitKey) {
+      clientSets[code] = clientSets[code] || new Set();
+      clientSets[code].add(nitKey);
+    }
   });
   return Object.values(grouped)
-    .map((row) => ({ ...row, pct_vencido: row.total ? row.vencido / row.total : 0 }))
+    .map((row) => ({
+      ...row,
+      clientes: clientSets[row.codigo]?.size || 0,
+      pct_vencido: row.total ? row.vencido / row.total : 0,
+    }))
     .sort((a, b) => b.total - a.total);
 }
 
@@ -398,7 +409,7 @@ function buildView() {
     aging,
     condition_mix,
     seller_aging: sellerRows,
-    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: operationalClients.filter((c) => c.asesor_codigo === row.codigo).length })),
+    sellers: sellerRows.map((row) => ({ codigo: row.codigo, nombre: row.nombre, saldo: row.total, vencido: row.vencido, clientes: row.clientes || 0 })),
     cities: Object.entries(
       principalClients.reduce((acc, client) => {
         acc[client.ciudad || "Sin ciudad"] = (acc[client.ciudad || "Sin ciudad"] || 0) + amount(client.total_saldo);
