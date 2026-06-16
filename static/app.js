@@ -122,6 +122,10 @@ function moneyM(value) {
   return `$${(amount(value) / 1000000).toLocaleString("es-CO", { maximumFractionDigits: 2 })}M`;
 }
 
+function moneyFull(value) {
+  return money.format(amount(value));
+}
+
 function docsClientsDetail(facturas, clientes) {
   const docsText = `${number.format(facturas || 0)} documentos`;
   return clientes ? `${docsText} · ${number.format(clientes)} clientes` : docsText;
@@ -512,16 +516,16 @@ function renderDashboard() {
   setText("kpiConcentrationMoney", money.format(summary.concentracion_top10 || 0));
   setText("overduePctCard", pct.format(overdueRatio));
   setText("overduePctHero", pct.format(overdueRatio));
-  setText("kpiCredito60", moneyM(credito60));
+  setText("kpiCredito60", moneyFull(credito60));
   setText("kpiCredito60Pct", pct.format(credito60 / operationalTotal || 0));
-  setText("kpiCredito45", moneyM(credito45));
+  setText("kpiCredito45", moneyFull(credito45));
   setText("kpiCredito45Pct", pct.format(credito45 / operationalTotal || 0));
-  setText("kpiPlatam30", moneyM(platam30));
+  setText("kpiPlatam30", moneyFull(platam30));
   setText("kpiPlatam30Pct", pct.format(platam30 / operationalTotal || 0));
-  setText("kpiPlatam60", moneyM(platam60));
+  setText("kpiPlatam60", moneyFull(platam60));
   setText("kpiPlatam60Pct", pct.format(platam60 / operationalTotal || 0));
-  setText("kpiContado", moneyM(contado));
-  setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyM(saldosFavor)}` : pct.format(contado / operationalTotal || 0));
+  setText("kpiContado", moneyFull(contado));
+  setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyFull(saldosFavor)}` : pct.format(contado / operationalTotal || 0));
   setText("goalOverdue", pct.format(overdueRatio));
   setText("goalOver90", pct.format(summary.over_90_pct || 0));
   setText("kpiNoGestion5d", number.format(dashboard.clients.filter(isNoGestion5d).length));

@@ -452,6 +452,7 @@ input[type="number"] {
   flex-direction: column;
   justify-content: space-between;
   gap: 10px;
+  overflow: hidden;
 }
 .metric-card.kpi-large { grid-column: span 3; }
 .metric-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
@@ -460,23 +461,26 @@ input[type="number"] {
   text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--ink-3);
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .metric-card strong {
   display: block;
   font-family: var(--font-display);
-  font-size: clamp(21px, 1.45vw, 27px);
+  font-size: clamp(18px, 1.35vw, 26px);
   font-weight: 500;
   letter-spacing: 0;
-  line-height: 1.05;
+  line-height: 1.08;
   color: var(--ink-1);
-  white-space: nowrap;
   max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
 }
 .metric-card small {
   display: block;
-  color: var(--ink-3);
-  font-size: 12px;
+  color: var(--ink-3); font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .metric-card.danger { background: linear-gradient(145deg,#fff,var(--danger-soft)); border-color: #fbbdba; }
 .metric-card.blue   { background: linear-gradient(145deg,#fff,var(--brand-50)); border-color: var(--brand-100); }
