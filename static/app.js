@@ -126,6 +126,20 @@ function moneyFull(value) {
   return money.format(amount(value));
 }
 
+function fitMetricValues() {
+  document.querySelectorAll(".metric-card strong").forEach((element) => {
+    element.style.fontSize = "";
+    const card = element.closest(".metric-card");
+    if (!card) return;
+    const available = Math.max(card.clientWidth - 36, 120);
+    let size = parseFloat(getComputedStyle(element).fontSize);
+    while (element.scrollWidth > available && size > 16) {
+      size -= 1;
+      element.style.fontSize = `${size}px`;
+    }
+  });
+}
+
 function docsClientsDetail(facturas, clientes) {
   const docsText = `${number.format(facturas || 0)} documentos`;
   return clientes ? `${docsText} · ${number.format(clientes)} clientes` : docsText;
@@ -505,15 +519,15 @@ function renderDashboard() {
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
-  setText("kpiTotal", money.format(summary.total_saldo));
-  setText("kpiOverdue", money.format(summary.total_vencido));
-  setText("kpiCurrent", money.format(summary.total_vigente));
+  setText("kpiTotal", moneyFull(summary.total_saldo));
+  setText("kpiOverdue", moneyFull(summary.total_vencido));
+  setText("kpiCurrent", moneyFull(summary.total_vigente));
   setText("kpiAvgMora", `${number.format(Math.round(summary.mora_promedio || 0))} días`);
   setText("kpiClients", number.format(summary.clientes));
   setText("kpiOverdueClients", `${number.format(summary.clientes_vencidos)} clientes vencidos`);
   setText("kpiOverdueInvoices", `${number.format(summary.facturas_vencidas)} facturas vencidas`);
   setText("kpiConcentration", pct.format(summary.concentracion_top10_pct || 0));
-  setText("kpiConcentrationMoney", money.format(summary.concentracion_top10 || 0));
+  setText("kpiConcentrationMoney", moneyFull(summary.concentracion_top10 || 0));
   setText("overduePctCard", pct.format(overdueRatio));
   setText("overduePctHero", pct.format(overdueRatio));
   setText("kpiCredito60", moneyFull(credito60));
@@ -542,6 +556,7 @@ function renderDashboard() {
   });
   setText("kpiRotation", `${number.format(Math.round(summary.rotacion_cartera_dias || 0))} días`);
   setText("kpiRotationDetail", "Promedio ponderado sobre cartera gestionable");
+  requestAnimationFrame(fitMetricValues);
   const promesasResumen = dashboard.promesas_resumen || {};
   const gestionCobertura = dashboard.gestion_cobertura || {};
   const deterioroRows = dashboard.clientes_deterioro || [];
@@ -2361,6 +2376,8 @@ document.querySelectorAll(".segment").forEach((button) => {
 $("importForm").addEventListener("submit", previewImport);
 $("confirmImportBtn").addEventListener("click", confirmImport);
 $("downloadInvoicesBtn").addEventListener("click", downloadVisibleInvoices);
+window.addEventListener("resize", fitMetricValues);
+document.fonts?.ready?.then(fitMetricValues);
 $("noGestion5dBtn").addEventListener("click", () => {
   clientNoGestionMode = !clientNoGestionMode;
   showPage("clientes");
