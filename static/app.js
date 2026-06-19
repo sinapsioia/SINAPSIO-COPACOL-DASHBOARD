@@ -586,6 +586,7 @@ function renderDashboard() {
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", moneyFull(summary.total_saldo));
+  setText("kpiCopacol", moneyFull(copacol.total_saldo));
   setText("kpiPlatam", moneyFull(platam.total_saldo));
   setText("kpiPlatamDetail", platamDetailParts.join(" · "));
   setText("kpiOverdue", moneyFull(copacol.total_vencido));
