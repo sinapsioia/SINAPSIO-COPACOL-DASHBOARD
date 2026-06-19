@@ -117,8 +117,8 @@
             <label for="accountFilter">Cuenta contable</label>
             <select id="accountFilter">
               <option value="1305050100">1305050100 · Cartera COPACOL</option>
-              <option value="1305052200">1305052200 · Cartera adicional</option>
-              <option value="all">Todas COPACOL</option>
+              <option value="1305052200">1305052200 · Cartera Platam</option>
+              <option value="all">General: COPACOL + Platam</option>
             </select>
           </div>
           <div class="filter-group">
@@ -156,7 +156,7 @@
 
           <div id="semaforoPanel" class="semaforo-panel">
             <div>
-              <span class="eyebrow">Semáforo cartera vencida</span>
+              <span class="eyebrow">Semáforo cartera COPACOL vencida</span>
               <strong id="semaforoStatus">-</strong>
               <small id="semaforoDetail">Verde ≤ 8% · Amarillo 8-15% · Rojo &gt; 15%</small>
             </div>
@@ -169,45 +169,40 @@
 
           <div class="executive-grid">
             <article class="metric-card kpi-large">
-              <span>Cartera COPACOL</span>
+              <span>Cartera General</span>
               <strong id="kpiTotal">-</strong>
-              <small>Total fijo: 1305050100 y 1305052200</small>
+              <small>COPACOL + Platam</small>
             </article>
-            <article class="metric-card danger kpi-large">
-              <span>Cartera vencida</span>
-              <strong id="kpiOverdue">-</strong>
-              <div class="mini-progress"><i id="overdueProgress"></i></div>
-              <small id="overduePctCard">-</small>
+            <article class="metric-card blue kpi-large">
+              <span>Cartera Platam</span>
+              <strong id="kpiPlatam">-</strong>
+              <small id="kpiPlatamDetail">30 días - · 60 días -</small>
             </article>
             <article class="metric-card blue">
-              <span>Crédito 60 días</span>
+              <span>COPACOL 60 días</span>
               <strong id="kpiCredito60">-</strong>
               <small id="kpiCredito60Pct">-</small>
             </article>
             <article class="metric-card orange">
-              <span>Crédito 45 días</span>
+              <span>COPACOL 45 días</span>
               <strong id="kpiCredito45">-</strong>
               <small id="kpiCredito45Pct">-</small>
             </article>
-            <article class="metric-card blue">
-              <span>Platam 30 días</span>
-              <strong id="kpiPlatam30">-</strong>
-              <small id="kpiPlatam30Pct">-</small>
-            </article>
-            <article class="metric-card blue">
-              <span>Platam 60 días</span>
-              <strong id="kpiPlatam60">-</strong>
-              <small id="kpiPlatam60Pct">-</small>
-            </article>
             <article class="metric-card good">
-              <span>Contado</span>
+              <span>COPACOL contado</span>
               <strong id="kpiContado">-</strong>
               <small id="kpiContadoPct">-</small>
             </article>
-            <article class="metric-card">
-              <span>Rotación cartera</span>
+            <article class="metric-card danger kpi-large">
+              <span>Cartera COPACOL vencida</span>
+              <strong id="kpiOverdue">-</strong>
+              <div class="mini-progress"><i id="overdueProgress"></i></div>
+              <small id="overduePctCard">-</small>
+            </article>
+            <article class="metric-card kpi-large">
+              <span>DSO COPACOL</span>
               <strong id="kpiRotation">-</strong>
-              <small id="kpiRotationDetail">DSO requiere ventas del mes</small>
+              <small id="kpiRotationDetail">Promedio de recuperación COPACOL</small>
             </article>
           </div>
 
@@ -238,7 +233,7 @@
 
           <div class="goal-strip">
             <div>
-              <span>% vencida total</span>
+              <span>% vencida COPACOL</span>
               <strong id="goalOverdue">-</strong>
               <small>Meta: &lt; 8%</small>
             </div>
@@ -910,6 +905,6 @@
       </div>
     </aside>
 
-    <script src="/app.js?v=full-kpi-values-20260616"></script>
+    <script src="/app.js?v=copacol-kpi-model-20260618"></script>
   </body>
 </html>

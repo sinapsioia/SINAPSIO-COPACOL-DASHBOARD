@@ -44,8 +44,10 @@ const agingLabels = {
 
 const agingKeys = Object.keys(agingLabels);
 const overdueAgingKeys = ["1_4", "5_15", "16_30", "31_60", "61_90", "91_120", "121_180", "181_plus"];
-const mainCarteraAccount = "1305050100";
-const totalCarteraAccounts = new Set(["1305050100", "1305052200"]);
+const copacolAccount = "1305050100";
+const platamAccount = "1305052200";
+const mainCarteraAccount = copacolAccount;
+const totalCarteraAccounts = new Set([copacolAccount, platamAccount]);
 
 function emptyAging() {
   return Object.fromEntries(agingKeys.map((key) => [key, 0]));
@@ -166,6 +168,13 @@ function signedMoneyM(value) {
 
 function conditionValue(key) {
   return amount(((dashboard.view || dashboard).condition_mix.find((item) => item.condicion === key) || {}).saldo);
+}
+
+function conditionValueFromMix(mix, key) {
+  if (Array.isArray(mix)) {
+    return amount((mix.find((item) => item.condicion === key) || {}).saldo);
+  }
+  return amount((mix || {})[key]);
 }
 
 function conditionPrefixValue(prefixes, mode = "all") {
@@ -372,6 +381,50 @@ function clientsFromInvoiceScope(rows, baseClients) {
   });
 }
 
+function summarizeInvoiceScope(rows) {
+  const aging = emptyAging();
+  const conditionMap = {};
+  let totalVencido = 0;
+  let totalVigente = 0;
+  let facturasVencidas = 0;
+  let moraSum = 0;
+  let weightedDays = 0;
+  let saldosFavor = 0;
+
+  rows.forEach((invoice) => {
+    const rawValue = amount(invoice.monto);
+    const positiveValue = Math.max(rawValue, 0);
+    const days = amount(invoice.dias_mora);
+    const bucket = invoice.aging_bucket || agingBucketFromDays(days, rawValue);
+    const conditionKey = rawValue < 0 ? "saldos_a_favor" : (invoice.condicion_pago_real || invoice.condicion_pago || "sin_condicion_real");
+    aging[bucket] += rawValue;
+    conditionMap[conditionKey] = (conditionMap[conditionKey] || 0) + rawValue;
+    if (rawValue < 0) saldosFavor += Math.abs(rawValue);
+    if (days > 0) {
+      totalVencido += rawValue;
+      facturasVencidas += 1;
+      moraSum += days;
+    } else {
+      totalVigente += rawValue;
+    }
+    weightedDays += Math.max(days, 0) * positiveValue;
+  });
+
+  const totalSaldo = rows.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
+  return {
+    aging,
+    condition_mix: conditionMap,
+    total_saldo: totalSaldo,
+    total_vencido: totalVencido,
+    total_vigente: totalVigente,
+    facturas: rows.length,
+    facturas_vencidas: facturasVencidas,
+    mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
+    rotacion_cartera_dias: totalSaldo ? weightedDays / totalSaldo : 0,
+    saldos_a_favor: saldosFavor,
+  };
+}
+
 function buildView() {
   const filters = activeFilters();
   const invoices = filteredInvoices(false, false);
@@ -380,42 +433,29 @@ function buildView() {
   const operationalAccountSet = selectedOperationalAccounts(filters);
   const principalInvoices = invoices.filter((invoice) => accountMatches(invoice, totalCarteraAccounts, !hasSiigoAccounts));
   const operationalInvoices = invoices.filter((invoice) => accountMatches(invoice, operationalAccountSet, !hasSiigoAccounts));
+  const copacolInvoices = invoices.filter((invoice) => accountMatches(invoice, new Set([copacolAccount]), !hasSiigoAccounts));
+  const platamInvoices = invoices.filter((invoice) => accountMatches(invoice, new Set([platamAccount]), false));
   const principalClients = clientsFromInvoiceScope(principalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
   const operationalClients = clientsFromInvoiceScope(operationalInvoices, clients).sort((a, b) => amount(b.total_saldo) - amount(a.total_saldo));
-  const aging = emptyAging();
-  const conditionMap = {};
+  const operationalScope = summarizeInvoiceScope(operationalInvoices);
+  const copacolScope = summarizeInvoiceScope(copacolInvoices);
+  const platamScope = summarizeInvoiceScope(platamInvoices);
+  const aging = operationalScope.aging;
   const dueSoon = [];
-  let totalVencido = 0;
-  let operationalVigente = 0;
-  let facturasVencidas = 0;
-  let moraSum = 0;
-  let weightedDays = 0;
 
   operationalInvoices.forEach((invoice) => {
-    const rawValue = amount(invoice.monto);
     const days = amount(invoice.dias_mora);
-    aging[invoice.aging_bucket] += rawValue;
-    weightedDays += Math.max(days, 0) * rawValue;
-    const conditionKey = rawValue < 0 ? "saldos_a_favor" : (invoice.condicion_pago_real || invoice.condicion_pago || "sin_condicion_real");
-    conditionMap[conditionKey] = (conditionMap[conditionKey] || 0) + rawValue;
-    if (days > 0) {
-      totalVencido += rawValue;
-      facturasVencidas += 1;
-      moraSum += days;
-    } else {
-      operationalVigente += rawValue;
-      if (days >= -7) dueSoon.push(invoice);
-    }
+    if (days <= 0 && days >= -7) dueSoon.push(invoice);
   });
 
   const totalSaldo = principalInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
   const operationalTotal = operationalInvoices.reduce((sum, invoice) => sum + amount(invoice.monto), 0);
-  const saldosFavorOperativos = operationalInvoices.reduce((sum, invoice) => {
-    const value = amount(invoice.monto);
-    return value < 0 ? sum + Math.abs(value) : sum;
-  }, 0);
+  const totalVencido = operationalScope.total_vencido;
+  const operationalVigente = operationalScope.total_vigente;
+  const facturasVencidas = operationalScope.facturas_vencidas;
+  const saldosFavorOperativos = operationalScope.saldos_a_favor;
   const sellerRows = buildSellerAging(operationalInvoices);
-  const condition_mix = Object.entries(conditionMap)
+  const condition_mix = Object.entries(operationalScope.condition_mix)
     .map(([condicion, saldo]) => ({ condicion, saldo }))
     .sort((a, b) => b.saldo - a.saldo);
 
@@ -445,8 +485,8 @@ function buildView() {
       clientes_vencidos: operationalClients.filter((client) => amount(client.total_vencido) > 0).length,
       facturas: operationalInvoices.length,
       facturas_vencidas: facturasVencidas,
-      mora_promedio: facturasVencidas ? moraSum / facturasVencidas : 0,
-      rotacion_cartera_dias: operationalTotal ? weightedDays / operationalTotal : 0,
+      mora_promedio: operationalScope.mora_promedio,
+      rotacion_cartera_dias: operationalScope.rotacion_cartera_dias,
       concentracion_top10: principalClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0),
       concentracion_top10_pct: totalSaldo ? principalClients.slice(0, 10).reduce((sum, client) => sum + amount(client.total_saldo), 0) / totalSaldo : 0,
       over_90: aging["91_120"] + aging["121_180"] + aging["181_plus"],
@@ -460,6 +500,26 @@ function buildView() {
         clientes: operationalClients.length,
         facturas: operationalInvoices.length,
         saldos_a_favor: saldosFavorOperativos,
+      },
+      cartera_copacol: {
+        cuenta: copacolAccount,
+        total_saldo: copacolScope.total_saldo,
+        total_vencido: copacolScope.total_vencido,
+        total_vigente: copacolScope.total_vigente,
+        facturas: copacolScope.facturas,
+        facturas_vencidas: copacolScope.facturas_vencidas,
+        rotacion_cartera_dias: copacolScope.rotacion_cartera_dias,
+        saldos_a_favor: copacolScope.saldos_a_favor,
+        condition_mix: copacolScope.condition_mix,
+      },
+      cartera_platam: {
+        cuenta: platamAccount,
+        total_saldo: platamScope.total_saldo,
+        total_vencido: platamScope.total_vencido,
+        total_vigente: platamScope.total_vigente,
+        facturas: platamScope.facturas,
+        facturas_vencidas: platamScope.facturas_vencidas,
+        condition_mix: platamScope.condition_mix,
       },
     },
   };
@@ -507,21 +567,29 @@ function renderDashboard() {
   dashboard.view = buildView();
   const view = dashboard.view;
   const summary = view.summary;
-  const operationalTotal = amount(summary.cartera_operativa?.total_saldo) || summary.total_saldo;
-  const overdueRatio = operationalTotal ? summary.total_vencido / operationalTotal : 0;
-  const credito60 = conditionValue("credito_60d");
-  const credito45 = conditionValue("credito_45d");
-  const platam30 = conditionValue("platam_30d");
-  const platam60 = conditionValue("platam_60d");
-  const contado = conditionValue("contado");
-  const saldosFavor = amount(summary.saldos_a_favor) || Math.abs(conditionValue("saldos_a_favor"));
+  const copacol = summary.cartera_copacol || summary.cartera_operativa || {};
+  const platam = summary.cartera_platam || {};
+  const copacolTotal = amount(copacol.total_saldo);
+  const operationalTotal = copacolTotal || amount(summary.cartera_operativa?.total_saldo) || summary.total_saldo;
+  const overdueRatio = operationalTotal ? amount(copacol.total_vencido) / operationalTotal : 0;
+  const credito60 = conditionValueFromMix(copacol.condition_mix, "credito_60d");
+  const credito45 = conditionValueFromMix(copacol.condition_mix, "credito_45d");
+  const contado = conditionValueFromMix(copacol.condition_mix, "contado");
+  const platam30 = conditionValueFromMix(platam.condition_mix, "platam_30d");
+  const platam60 = conditionValueFromMix(platam.condition_mix, "platam_60d");
+  const platamOther = amount(platam.total_saldo) - platam30 - platam60;
+  const platamDetailParts = [`30 días ${moneyFull(platam30)}`, `60 días ${moneyFull(platam60)}`];
+  if (Math.abs(platamOther) >= 1) platamDetailParts.push(`Otros ${moneyFull(platamOther)}`);
+  const saldosFavor = amount(copacol.saldos_a_favor) || Math.abs(conditionValueFromMix(copacol.condition_mix, "saldos_a_favor"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", moneyFull(summary.total_saldo));
-  setText("kpiOverdue", moneyFull(summary.total_vencido));
-  setText("kpiCurrent", moneyFull(summary.total_vigente));
+  setText("kpiPlatam", moneyFull(platam.total_saldo));
+  setText("kpiPlatamDetail", platamDetailParts.join(" · "));
+  setText("kpiOverdue", moneyFull(copacol.total_vencido));
+  setText("kpiCurrent", moneyFull(copacol.total_vigente));
   setText("kpiAvgMora", `${number.format(Math.round(summary.mora_promedio || 0))} días`);
   setText("kpiClients", number.format(summary.clientes));
   setText("kpiOverdueClients", `${number.format(summary.clientes_vencidos)} clientes vencidos`);
@@ -534,10 +602,6 @@ function renderDashboard() {
   setText("kpiCredito60Pct", pct.format(credito60 / operationalTotal || 0));
   setText("kpiCredito45", moneyFull(credito45));
   setText("kpiCredito45Pct", pct.format(credito45 / operationalTotal || 0));
-  setText("kpiPlatam30", moneyFull(platam30));
-  setText("kpiPlatam30Pct", pct.format(platam30 / operationalTotal || 0));
-  setText("kpiPlatam60", moneyFull(platam60));
-  setText("kpiPlatam60Pct", pct.format(platam60 / operationalTotal || 0));
   setText("kpiContado", moneyFull(contado));
   setText("kpiContadoPct", saldosFavor ? `Saldos a favor ${moneyFull(saldosFavor)}` : pct.format(contado / operationalTotal || 0));
   setText("goalOverdue", pct.format(overdueRatio));
@@ -554,8 +618,8 @@ function renderDashboard() {
   document.querySelectorAll(".semaforo-lights i").forEach((light) => {
     light.classList.toggle("active", light.dataset.light === semaforo.key);
   });
-  setText("kpiRotation", `${number.format(Math.round(summary.rotacion_cartera_dias || 0))} días`);
-  setText("kpiRotationDetail", "Promedio ponderado sobre cartera gestionable");
+  setText("kpiRotation", `${number.format(Math.round(copacol.rotacion_cartera_dias || 0))} días`);
+  setText("kpiRotationDetail", "Promedio ponderado de recuperación COPACOL");
   requestAnimationFrame(fitMetricValues);
   const promesasResumen = dashboard.promesas_resumen || {};
   const gestionCobertura = dashboard.gestion_cobertura || {};
