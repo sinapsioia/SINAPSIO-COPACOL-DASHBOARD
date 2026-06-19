@@ -459,56 +459,62 @@
             <div>
               <p class="eyebrow">Administración de carteras</p>
               <h2>Asignación de clientes a asesores</h2>
-              <span id="advisorManageCount" class="muted">Cargando carteras activas…</span>
+              <span id="advisorManageCount" class="muted">Cargando clientes activos…</span>
             </div>
-            <button id="refreshAdvisorManage" type="button" class="download-btn">Actualizar carteras</button>
+            <button id="refreshAdvisorManage" type="button" class="download-btn">Actualizar</button>
           </div>
           <div id="advisorManageSummary" class="promesas-kpi-strip advisor-manage-summary"></div>
-          <div class="advisor-admin-grid">
-            <article class="advisor-admin-panel">
+          <div class="advisor-assignment-workspace">
+            <article class="advisor-admin-panel advisor-target-panel">
               <div class="section-head">
                 <div>
-                  <h2>Carteras activas</h2>
-                  <span class="muted">Solo corte vigente en Supabase</span>
+                  <h2>Asesor destino</h2>
+                  <span id="advisorTargetHint" class="muted">0 seleccionados</span>
                 </div>
               </div>
-              <div class="form-group">
-                <label for="advisorManageSearch">Buscar cliente</label>
-                <input id="advisorManageSearch" placeholder="Cliente, NIT, asesor o ciudad" />
-              </div>
-              <div id="advisorPortfolioList" class="advisor-portfolio-list"></div>
-            </article>
-            <article class="advisor-admin-panel wide">
-              <div class="section-head">
-                <div>
-                  <h2>Clientes de la cartera</h2>
-                  <span id="advisorManageSelection" class="muted">Selecciona clientes para reasignar</span>
-                </div>
-              </div>
-              <div class="advisor-assignment-bar">
+              <div class="advisor-target-card">
                 <div class="form-group">
-                  <label for="advisorManageTarget">Asignar a asesor existente</label>
+                  <label for="advisorManageTarget">Asesor existente</label>
                   <select id="advisorManageTarget">
                     <option value="">Seleccionar asesor</option>
                   </select>
                 </div>
+                <div class="advisor-divider"><span>Nuevo asesor</span></div>
                 <div class="form-group">
-                  <label for="advisorManageNewCodigo">O crear / asignar asesor</label>
+                  <label for="advisorManageNewCodigo">Código y nombre</label>
                   <div class="asesor-new-grid">
                     <input id="advisorManageNewCodigo" placeholder="Código" />
                     <input id="advisorManageNewNombre" placeholder="Nombre" />
                   </div>
                 </div>
-                <div class="advisor-assignment-actions">
-                  <button id="assignSelectedAdvisor" type="button">Asignar seleccionados</button>
+                <div class="advisor-assignment-actions stacked">
+                  <button id="assignSelectedAdvisor" type="button">Asignar clientes</button>
                   <button id="clearSelectedAdvisor" type="button" class="btn-secondary">Quitar asesor</button>
                 </div>
+              </div>
+            </article>
+            <article class="advisor-admin-panel advisor-client-panel wide">
+              <div class="section-head">
+                <div>
+                  <h2>Clientes activos</h2>
+                  <span id="advisorManageSelection" class="muted">0 seleccionados</span>
+                </div>
+              </div>
+              <div class="advisor-client-toolbar">
+              <div class="form-group">
+                <label for="advisorManageSearch">Buscar cliente</label>
+                <input id="advisorManageSearch" placeholder="Cliente, NIT, asesor o ciudad" />
+              </div>
+                <label class="advisor-select-all">
+                  <input id="advisorManageSelectAll" type="checkbox" />
+                  <span>Seleccionar visibles</span>
+                </label>
               </div>
               <div class="table-wrap advisor-manage-table">
                 <table>
                   <thead>
                     <tr>
-                      <th><input id="advisorManageSelectAll" type="checkbox" /></th>
+                      <th></th>
                       <th>Cliente</th>
                       <th>NIT</th>
                       <th>Asesor actual</th>
@@ -910,6 +916,6 @@
       </div>
     </aside>
 
-    <script src="/app.js?v=copacol-kpi-model-v2-20260618"></script>
+    <script src="/app.js?v=advisor-assignment-ui-20260618"></script>
   </body>
 </html>

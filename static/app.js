@@ -25,7 +25,6 @@ let drawerNit = null;
 let importHistory = [];
 let clientNoGestionMode = false;
 let asesoresGestion = { summary: {}, asesores: [], catalogo: [], clientes: [] };
-let advisorManageFilter = "all";
 let advisorManageSearch = "";
 let advisorManageSelected = new Set();
 
@@ -856,7 +855,7 @@ async function loadAsesoresGestion(force = false) {
     renderAsesoresGestion();
     return;
   }
-  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="muted">Cargando carteras activas…</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="muted">Cargando clientes activos…</td></tr>';
   try {
     const res = await fetch("/api/asesores/gestion", { cache: "no-store" });
     const data = await res.json();
@@ -874,14 +873,13 @@ async function loadAsesoresGestion(force = false) {
 function advisorManageFilteredClients() {
   const term = advisorManageSearch.trim().toLowerCase();
   return (asesoresGestion.clientes || []).filter((client) => {
-    const keyOk = advisorManageFilter === "all" || advisorManageKey(client) === advisorManageFilter;
     const textOk =
       !term ||
       [client.razon_social, client.nit, client.asesor_nombre, client.asesor_codigo, client.ciudad]
         .join(" ")
         .toLowerCase()
         .includes(term);
-    return keyOk && textOk;
+    return textOk;
   });
 }
 
@@ -896,6 +894,12 @@ function renderAdvisorTargetSelect() {
         return `<option value="${escapeHtml(value)}">${escapeHtml(row.asesor_nombre || "Sin nombre")} · cód ${escapeHtml(row.asesor_codigo || "—")}</option>`;
       })
       .join("");
+}
+
+function advisorSelectionLabel(selected, visible) {
+  const selectedWord = selected === 1 ? "seleccionado" : "seleccionados";
+  const clientWord = visible === 1 ? "cliente" : "clientes";
+  return `${number.format(selected)} ${selectedWord} · ${number.format(visible)} ${clientWord}`;
 }
 
 function renderAsesoresGestion() {
@@ -914,44 +918,6 @@ function renderAsesoresGestion() {
     `;
   }
   renderAdvisorTargetSelect();
-  const portfolioRows = [
-    {
-      key: "all",
-      asesor_nombre: "Todas las carteras",
-      clientes: summary.clientes || 0,
-      saldo: (asesoresGestion.asesores || []).reduce((sum, row) => sum + amount(row.saldo), 0),
-      vencido: (asesoresGestion.asesores || []).reduce((sum, row) => sum + amount(row.vencido), 0),
-      tipo: "all",
-    },
-    ...(asesoresGestion.asesores || []),
-  ];
-  const list = $("advisorPortfolioList");
-  if (list) {
-    list.innerHTML = portfolioRows
-      .map((row) => {
-        const active = advisorManageFilter === row.key ? "active" : "";
-        const label = row.asesor_nombre || "Sin asesor";
-        const ratio = amount(row.saldo) ? amount(row.vencido) / amount(row.saldo) : 0;
-        return `
-          <button class="advisor-portfolio-btn ${active}" data-advisor-filter="${escapeHtml(row.key)}">
-            <div>
-              <strong>${escapeHtml(label)}</strong>
-              <span>${number.format(row.clientes || 0)} clientes · ${pct.format(ratio)} vencido</span>
-              <em>${row.tipo === "no_catalogado" ? "Pendiente de clasificación" : row.tipo === "sin_asesor" ? "Sin responsable asignado" : row.asesor_codigo ? `Código ${escapeHtml(row.asesor_codigo)}` : ""}</em>
-            </div>
-            <b>${moneyM(row.saldo || 0)}</b>
-          </button>
-        `;
-      })
-      .join("");
-    list.querySelectorAll("[data-advisor-filter]").forEach((button) => {
-      button.addEventListener("click", () => {
-        advisorManageFilter = button.dataset.advisorFilter || "all";
-        advisorManageSelected = new Set();
-        renderAsesoresGestion();
-      });
-    });
-  }
   renderAdvisorManageClients();
 }
 
@@ -961,17 +927,19 @@ function renderAdvisorManageClients() {
   if (!tbody) return;
   const visibleNits = new Set(rows.map((row) => row.nit));
   advisorManageSelected = new Set([...advisorManageSelected].filter((nit) => visibleNits.has(nit)));
+  const selectedText = advisorSelectionLabel(advisorManageSelected.size, rows.length);
   setText(
     "advisorManageSelection",
-    `${number.format(advisorManageSelected.size)} seleccionados · ${number.format(rows.length)} visibles`,
+    selectedText,
   );
+  setText("advisorTargetHint", selectedText);
   const selectAll = $("advisorManageSelectAll");
   if (selectAll) {
     selectAll.checked = rows.length > 0 && rows.every((row) => advisorManageSelected.has(row.nit));
     selectAll.indeterminate = rows.some((row) => advisorManageSelected.has(row.nit)) && !selectAll.checked;
   }
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="muted">No hay clientes con este filtro.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="muted">No hay clientes con esta búsqueda.</td></tr>';
     return;
   }
   tbody.innerHTML = rows
@@ -984,7 +952,7 @@ function renderAdvisorManageClients() {
           : client.asesor_nombre || "Sin asesor";
       const manualBadge = client.tiene_override_asesor ? ' <span class="status ok">Manual</span>' : "";
       return `
-        <tr>
+        <tr data-nit="${escapeHtml(client.nit || "")}" class="${checked ? "selected-row" : ""}">
           <td><input class="advisor-manage-check" type="checkbox" data-nit="${escapeHtml(client.nit)}" ${checked} /></td>
           <td>
             <div class="advisor-client-name">
@@ -1006,6 +974,16 @@ function renderAdvisorManageClients() {
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) advisorManageSelected.add(checkbox.dataset.nit);
       else advisorManageSelected.delete(checkbox.dataset.nit);
+      renderAdvisorManageClients();
+    });
+  });
+  tbody.querySelectorAll("tr[data-nit]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("input,button,a")) return;
+      const nit = row.dataset.nit;
+      if (!nit) return;
+      if (advisorManageSelected.has(nit)) advisorManageSelected.delete(nit);
+      else advisorManageSelected.add(nit);
       renderAdvisorManageClients();
     });
   });
@@ -1644,6 +1622,7 @@ function rerenderFilteredViews() {
 
 function showPage(page) {
   currentPage = page;
+  document.body.dataset.currentPage = page;
   const labels = {
     tablero: "Tablero de Cobranzas",
     inteligencia: "Inteligencia de Cobranza",
