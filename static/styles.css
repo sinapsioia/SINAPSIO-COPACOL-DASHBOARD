@@ -3,11 +3,43 @@
    Sistema visual cálido + analítico
    ============================================ */
 
+/* === BRAND TYPEFACE · CANARO ===
+   Canaro es la tipografía de marca de COPACOL (comercial, no está en
+   Google Fonts). Al colocar los archivos licenciados en
+   static/assets/fonts/ toman el control automáticamente; mientras tanto
+   se usa el sustituto geométrico Poppins definido en --font-display/sans. */
+@font-face {
+  font-family: 'Canaro';
+  src: url('/assets/fonts/Canaro-Regular.woff2') format('woff2'),
+       url('/assets/fonts/Canaro-Regular.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Canaro';
+  src: url('/assets/fonts/Canaro-Medium.woff2') format('woff2'),
+       url('/assets/fonts/Canaro-Medium.woff') format('woff');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Canaro';
+  src: url('/assets/fonts/Canaro-Bold.woff2') format('woff2'),
+       url('/assets/fonts/Canaro-Bold.woff') format('woff');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* === TOKENS === */
 :root {
   --brand-500: #001871;
   --brand-600: #00135C;
   --brand-700: #000E45;
+  --brand-400: #4D5FB0;
+  --brand-300: #97A2DA;
   --brand-100: #DCE4FF;
   --brand-50:  #EEF2FF;
 
@@ -35,8 +67,8 @@
   --border:   #E5DDD0;
   --border-2: #D7CCBA;
 
-  --font-display: 'Canaro', 'Fraunces', Georgia, serif;
-  --font-sans:    'Canaro', 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Canaro', 'Poppins', 'Geist', sans-serif;
+  --font-sans:    'Canaro', 'Poppins', 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono:    'Geist Mono', 'Roboto Mono', ui-monospace, monospace;
 
   --pad-card: 22px;
@@ -172,7 +204,7 @@ body {
   transition: color 160ms, background 160ms;
 }
 .nav-item:hover { color: white; background: rgba(255,255,255,.08); }
-.nav-item.active { color: white; background: rgba(234,88,12,.18); }
+.nav-item.active { color: white; background: rgba(255,105,0,.16); }
 .nav-item.active::before {
   content: "";
   position: absolute;
@@ -244,17 +276,19 @@ main {
 
 h1 {
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 700;
   font-size: 30px;
-  letter-spacing: -0.025em;
+  letter-spacing: 0.005em;
+  text-transform: uppercase;
   color: var(--ink-1);
-  line-height: 1.1;
+  line-height: 1.12;
 }
 h2 {
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 700;
   font-size: 19px;
-  letter-spacing: -0.015em;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
   color: var(--ink-1);
 }
 .eyebrow {
@@ -574,7 +608,7 @@ input[type="number"] {
 .hero .muted   { color: #B7C0E6; }
 .hero h2 {
   font-family: var(--font-display); font-size: 30px;
-  font-weight: 500; color: white;
+  font-weight: 700; color: white;
 }
 .hero-meter { display: flex; align-items: center; gap: 18px; }
 .hero-meter strong {
@@ -1008,7 +1042,7 @@ button.rank-row:hover { background: var(--surface-2); }
   background: var(--accent-50);
 }
 .advisor-manage-table tbody tr.selected-row td {
-  background: rgba(13, 86, 140, .08);
+  background: rgba(0, 24, 113, .08);
 }
 
 /* ============================================
