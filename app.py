@@ -438,6 +438,22 @@ def export_invoice_matches(invoice: dict, filters: dict, has_siigo_accounts: boo
     return not is_uncatalogued_seller(invoice)
 
 
+def export_summary_bucket(days: float) -> str | None:
+    if days <= 0:
+        return None
+    if days <= 30:
+        return "1_30"
+    if days <= 60:
+        return "31_60"
+    if days <= 90:
+        return "61_90"
+    if days <= 120:
+        return "91_120"
+    if days <= 180:
+        return "121_180"
+    return "181_plus"
+
+
 def safe_sheet_title(value: str, used: set[str]) -> str:
     cleaned = re.sub(r"[\[\]\:\*\?\/\\]", " ", value).strip() or "Asesor"
     base = re.sub(r"\s+", " ", cleaned)[:31].strip() or "Asesor"
@@ -501,50 +517,185 @@ def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
     thin = Side(style="thin", color="808080")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     money_fmt = '$ #,##0.00'
-    columns = ["DESC", "VENDED", "NIT", "NOMBRE", "TEL_1", "TEL_2", "DOCUMENTO", "FECHA", "VENCE", "DIAS", "SALDO", "CONDICION", "CUENTA"]
+    columns = ["DESC", "VENDED", "NIT", "NOMBRE", "TEL_1", "TEL_2", "DOCUMENTO", "FECHA", "VENCE", "DIAS", "SALDO", "CONDICION", "OBSERVACION"]
+
+    def advisor_export_stats(rows: list[dict]) -> dict:
+        condition_totals = {"credito_60d": 0.0, "credito_45d": 0.0, "contado": 0.0}
+        overdue_totals = {"1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "91_120": 0.0, "121_180": 0.0, "181_plus": 0.0}
+        overdue_clients: dict[str, set[str]] = {key: set() for key in overdue_totals}
+        due_soon_clients: set[str] = set()
+        total_clients: set[str] = set()
+        total = 0.0
+        total_overdue = 0.0
+        due_soon = 0.0
+        for row in rows:
+            value = money(row.get("monto"))
+            days = money(row.get("dias_mora"))
+            nit_key = normalize_nit(row.get("nit"))
+            if nit_key:
+                total_clients.add(nit_key)
+            total += value
+            condition_key = str(row.get("condicion_pago_real") or "").strip().lower()
+            if condition_key in condition_totals:
+                condition_totals[condition_key] += value
+            bucket = export_summary_bucket(days)
+            if bucket:
+                overdue_totals[bucket] += value
+                total_overdue += value
+                if nit_key:
+                    overdue_clients[bucket].add(nit_key)
+            elif -7 <= days <= 0:
+                due_soon += value
+                if nit_key:
+                    due_soon_clients.add(nit_key)
+        return {
+            "total": total,
+            "condition_totals": condition_totals,
+            "overdue_totals": overdue_totals,
+            "total_overdue": total_overdue,
+            "due_soon": due_soon,
+            "total_clients": total_clients,
+            "overdue_clients": overdue_clients,
+            "due_soon_clients": due_soon_clients,
+        }
+
+    advisors = sorted(grouped.values(), key=lambda row: (str(row["nombre"]).upper(), str(row["codigo"])))
+    for advisor in advisors:
+        advisor["stats"] = advisor_export_stats(advisor["facturas"])
 
     fecha_corte = (payload.get("summary") or {}).get("fecha_corte") or datetime.now().strftime("%Y-%m-%d")
-    ws["A1"] = "COPACOL - Reporte de cartera por asesor"
-    ws["A1"].font = Font(bold=True, size=15)
-    summary_rows = [
-        ("Fecha de corte", fecha_corte),
-        ("Generado", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-        ("Cuenta contable", filters["account"]),
-        ("Vendedor", filters["seller"]),
-        ("Edad", filters["aging"]),
-        ("Modo", filters["mode"]),
-        ("Busqueda", filters["term"] or "Todas"),
-        ("Saldo minimo", filters["minAmount"]),
-        ("Excluye vendedor no catalogado", "Si"),
-        ("Facturas exportadas", len(invoices)),
-        ("Clientes exportados", len({normalize_nit(row.get("nit")) for row in invoices if normalize_nit(row.get("nit"))})),
-        ("Total exportado", sum(money(row.get("monto")) for row in invoices)),
-    ]
-    for idx, (label, value) in enumerate(summary_rows, start=3):
-        ws.cell(idx, 1, label).font = header_font
-        ws.cell(idx, 2, value)
-        if label in {"Saldo minimo", "Total exportado"}:
-            ws.cell(idx, 2).number_format = money_fmt
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
+    ws.merge_cells(start_row=1, start_column=6, end_row=1, end_column=13)
+    ws["A1"] = "CARTERA COPACOL"
+    ws["F1"] = "CARTERA VENCIDA"
+    for cell in (ws["A1"], ws["F1"]):
+        cell.fill = blue
+        cell.font = Font(bold=True, size=14)
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
 
-    table_start = len(summary_rows) + 5
-    ws.cell(table_start, 1, "Asesor").fill = blue
-    ws.cell(table_start, 2, "Codigo").fill = blue
-    ws.cell(table_start, 3, "Clientes").fill = blue
-    ws.cell(table_start, 4, "Facturas").fill = blue
-    ws.cell(table_start, 5, "Total").fill = blue
-    for col in range(1, 6):
-        ws.cell(table_start, col).font = header_font
-        ws.cell(table_start, col).border = border
-    advisors = sorted(grouped.values(), key=lambda row: row["total"], reverse=True)
-    for row_idx, advisor in enumerate(advisors, start=table_start + 1):
-        values = [advisor["nombre"], advisor["codigo"], len(advisor["clientes"]), len(advisor["facturas"]), advisor["total"]]
-        for col_idx, value in enumerate(values, start=1):
+    summary_headers = [
+        "ASESOR",
+        "CARTERA COPACOL",
+        "60 DIAS",
+        "45 DIAS",
+        "CONTADO",
+        "1 A 30 DIAS",
+        "31 A 60 DIAS",
+        "61 A 90 DIAS",
+        "91 A 120 DIAS",
+        "121 A 180 DIAS",
+        "MAS DE 181",
+        "TOTAL POR ASESOR",
+        "%",
+    ]
+    for col_idx, header in enumerate(summary_headers, start=1):
+        cell = ws.cell(2, col_idx, header)
+        cell.fill = blue
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    grand = {
+        "total": 0.0,
+        "credito_60d": 0.0,
+        "credito_45d": 0.0,
+        "contado": 0.0,
+        "1_30": 0.0,
+        "31_60": 0.0,
+        "61_90": 0.0,
+        "91_120": 0.0,
+        "121_180": 0.0,
+        "181_plus": 0.0,
+        "total_overdue": 0.0,
+    }
+    for row_idx, advisor in enumerate(advisors, start=3):
+        stats = advisor["stats"]
+        condition_totals = stats["condition_totals"]
+        overdue_totals = stats["overdue_totals"]
+        row_values = [
+            advisor["nombre"],
+            stats["total"],
+            condition_totals["credito_60d"],
+            condition_totals["credito_45d"],
+            condition_totals["contado"],
+            overdue_totals["1_30"],
+            overdue_totals["31_60"],
+            overdue_totals["61_90"],
+            overdue_totals["91_120"],
+            overdue_totals["121_180"],
+            overdue_totals["181_plus"],
+            stats["total_overdue"],
+            stats["total_overdue"] / stats["total"] if stats["total"] else 0,
+        ]
+        for col_idx, value in enumerate(row_values, start=1):
             cell = ws.cell(row_idx, col_idx, value)
             cell.border = border
-            if col_idx == 5:
+            if col_idx == 1:
+                cell.fill = blue
+                cell.font = header_font
+            elif col_idx == 13:
+                cell.number_format = "0.0%"
+            else:
                 cell.number_format = money_fmt
+        grand["total"] += stats["total"]
+        grand["credito_60d"] += condition_totals["credito_60d"]
+        grand["credito_45d"] += condition_totals["credito_45d"]
+        grand["contado"] += condition_totals["contado"]
+        for key in overdue_totals:
+            grand[key] += overdue_totals[key]
+        grand["total_overdue"] += stats["total_overdue"]
+
+    total_row = len(advisors) + 3
+    total_values = [
+        "TOTAL",
+        grand["total"],
+        grand["credito_60d"],
+        grand["credito_45d"],
+        grand["contado"],
+        grand["1_30"],
+        grand["31_60"],
+        grand["61_90"],
+        grand["91_120"],
+        grand["121_180"],
+        grand["181_plus"],
+        grand["total_overdue"],
+        grand["total_overdue"] / grand["total"] if grand["total"] else 0,
+    ]
+    pct_values = [
+        "%",
+        1 if grand["total"] else 0,
+        grand["credito_60d"] / grand["total"] if grand["total"] else 0,
+        grand["credito_45d"] / grand["total"] if grand["total"] else 0,
+        grand["contado"] / grand["total"] if grand["total"] else 0,
+        grand["1_30"] / grand["total"] if grand["total"] else 0,
+        grand["31_60"] / grand["total"] if grand["total"] else 0,
+        grand["61_90"] / grand["total"] if grand["total"] else 0,
+        grand["91_120"] / grand["total"] if grand["total"] else 0,
+        grand["121_180"] / grand["total"] if grand["total"] else 0,
+        grand["181_plus"] / grand["total"] if grand["total"] else 0,
+        grand["total_overdue"] / grand["total"] if grand["total"] else 0,
+        None,
+    ]
+    for col_idx, value in enumerate(total_values, start=1):
+        cell = ws.cell(total_row, col_idx, value)
+        cell.border = border
+        cell.fill = blue
+        cell.font = header_font
+        if col_idx == 13:
+            cell.number_format = "0.0%"
+        elif col_idx > 1:
+            cell.number_format = money_fmt
+    for col_idx, value in enumerate(pct_values, start=1):
+        cell = ws.cell(total_row + 1, col_idx, value)
+        cell.border = border
+        cell.fill = blue
+        cell.font = header_font
+        if col_idx > 1 and value is not None:
+            cell.number_format = "0.0%"
+
     ws.freeze_panes = "A3"
-    widths = [34, 14, 12, 12, 18]
+    widths = [24, 18, 16, 16, 16, 16, 16, 16, 16, 16, 16, 18, 10]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -593,7 +744,7 @@ def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
                     money(invoice.get("dias_mora")),
                     money(invoice.get("monto")),
                     export_condition_label(invoice),
-                    invoice_account(invoice) or "",
+                    "",
                 ]
                 section_total += money(invoice.get("monto"))
                 for col_idx, value in enumerate(values, start=1):
@@ -603,7 +754,7 @@ def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
                         cell.fill = row_fill
                     if col_idx == 11:
                         cell.number_format = money_fmt
-                    if col_idx in {2, 3, 7, 10, 13}:
+                    if col_idx in {2, 3, 7, 10}:
                         cell.alignment = Alignment(horizontal="right")
                 current_row += 1
             sheet.cell(current_row, 10, "TOTAL RANGO").font = header_font
@@ -615,7 +766,85 @@ def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
         total_cell = sheet.cell(current_row, 11, advisor["total"])
         total_cell.font = red_font
         total_cell.number_format = money_fmt
-        for idx, width in enumerate([16, 10, 16, 34, 16, 16, 18, 13, 13, 9, 16, 18, 14], start=1):
+        current_row += 3
+
+        stats = advisor["stats"]
+        advisor_total = stats["total"]
+        overdue_totals = stats["overdue_totals"]
+        overdue_clients = stats["overdue_clients"]
+        advisor_summary_rows = [
+            ("Cartera difícil de cobro", 0, 0.0, 0),
+            ("Vencida 1 - 30 DIAS", len(overdue_clients["1_30"]), overdue_totals["1_30"], overdue_totals["1_30"] / advisor_total if advisor_total else 0),
+            ("Vencida 31 - 60 DIAS", len(overdue_clients["31_60"]), overdue_totals["31_60"], overdue_totals["31_60"] / advisor_total if advisor_total else 0),
+            ("Vencida 61 - 90 DIAS", len(overdue_clients["61_90"]), overdue_totals["61_90"], overdue_totals["61_90"] / advisor_total if advisor_total else 0),
+            ("Vencida 91 - 120 DIAS", len(overdue_clients["91_120"]), overdue_totals["91_120"], overdue_totals["91_120"] / advisor_total if advisor_total else 0),
+            ("Vencida 121 - 180 DIAS", len(overdue_clients["121_180"]), overdue_totals["121_180"], overdue_totals["121_180"] / advisor_total if advisor_total else 0),
+            ("Vencida + DE 181 DIAS", len(overdue_clients["181_plus"]), overdue_totals["181_plus"], overdue_totals["181_plus"] / advisor_total if advisor_total else 0),
+            ("Próximas a vencer (SEMANA)", len(stats["due_soon_clients"]), stats["due_soon"], stats["due_soon"] / advisor_total if advisor_total else 0),
+            ("Total cartera", len(stats["total_clients"]), advisor_total, None),
+        ]
+        sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+        title_cell = sheet.cell(current_row, 1, "1. Resumen por estado de cartera")
+        title_cell.fill = blue
+        title_cell.font = header_font
+        title_cell.border = border
+        current_row += 1
+        for col_idx, header in enumerate(["Categoría", "Nº de Clientes", "Total Saldo", "%"], start=1):
+            cell = sheet.cell(current_row, col_idx, header)
+            cell.fill = blue
+            cell.font = header_font
+            cell.border = border
+        current_row += 1
+        for category, clients_count, balance, share in advisor_summary_rows:
+            values = [category, clients_count, balance, share]
+            for col_idx, value in enumerate(values, start=1):
+                cell = sheet.cell(current_row, col_idx, value if value is not None else "")
+                cell.border = border
+                if category == "Total cartera":
+                    cell.font = header_font
+                if col_idx == 3:
+                    cell.number_format = money_fmt
+                    if category == "Total cartera":
+                        cell.font = red_font
+                if col_idx == 4 and value is not None:
+                    cell.number_format = "0%"
+            current_row += 1
+
+        current_row += 2
+        total_programado = stats["total_overdue"] + stats["due_soon"]
+        indicator_rows = [
+            ("% Cumplimiento Cartera Vencida ( Cartera Vencida Gestionada / Total Cartera Vencida Programada)", 0, stats["total_overdue"]),
+            ("% Cumplimiento Cartera Por vencer ( Cartera por vencer Gestionada / Total Cartera Por vencer)", 0, stats["due_soon"]),
+            ("Clientes reincidentes en Mora", 0, None),
+            ("Total Cartera Gestionada de la Semana", total_programado, None),
+        ]
+        sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+        title_cell = sheet.cell(current_row, 1, "2. Indicadores clave SEMANA")
+        title_cell.fill = blue
+        title_cell.font = header_font
+        title_cell.alignment = Alignment(horizontal="center")
+        title_cell.border = border
+        current_row += 1
+        for col_idx, header in enumerate(["Indicador", "Resultado", "$", ""], start=1):
+            cell = sheet.cell(current_row, col_idx, header)
+            cell.fill = blue
+            cell.font = header_font
+            cell.border = border
+        current_row += 1
+        for indicator, result_value, money_value in indicator_rows:
+            values = [indicator, result_value, money_value, ""]
+            for col_idx, value in enumerate(values, start=1):
+                cell = sheet.cell(current_row, col_idx, value if value is not None else "")
+                cell.border = border
+                if col_idx == 2:
+                    if indicator.startswith("%"):
+                        cell.number_format = "0%"
+                    elif "Total Cartera" in indicator:
+                        cell.number_format = money_fmt
+                if col_idx == 3 and value is not None:
+                    cell.number_format = money_fmt
+            current_row += 1
+        for idx, width in enumerate([34, 10, 16, 34, 16, 16, 18, 13, 13, 9, 16, 18, 22], start=1):
             sheet.column_dimensions[get_column_letter(idx)].width = width
 
     output = BytesIO()
