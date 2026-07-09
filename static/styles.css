@@ -912,6 +912,32 @@ button.rank-row:hover { background: var(--surface-2); }
 }
 .row-actions button:hover { background: var(--surface-2); }
 .row-actions .row-danger { color: var(--danger); border-color: rgba(239,68,68,0.3); }
+
+/* Botones de acción de compromisos: visibles y con color por tipo */
+.row-actions button.act {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-1);
+  font-weight: 700;
+  line-height: 1;
+}
+.row-actions button.act:hover { filter: brightness(0.96); }
+.row-actions button.act-ok {
+  color: #0f7b3f; border-color: rgba(16,123,63,0.35); background: rgba(16,123,63,0.08);
+}
+.row-actions button.act-warn {
+  color: #b45309; border-color: rgba(180,83,9,0.35); background: rgba(180,83,9,0.08);
+}
+.row-actions button.act.row-danger {
+  color: var(--danger); border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08);
+}
+
+.badge-registrado {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+}
+.badge-registrado.bot { background: var(--brand-50); color: var(--brand-500); border: 1px solid var(--brand-100); }
+.badge-registrado.humano { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); }
 .link-cell {
   background: none; border: none; color: var(--brand-500);
   cursor: pointer; text-align: left; padding: 0; font: inherit; font-weight: 600;

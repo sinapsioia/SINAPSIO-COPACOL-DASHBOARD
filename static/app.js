@@ -1682,6 +1682,13 @@ async function loadPromesas() {
   }
 }
 
+function registradoBadge(value) {
+  const s = String(value || "").trim().toLowerCase();
+  if (s === "bot") return '<span class="badge-registrado bot">🤖 Bot</span>';
+  if (!s) return '<span class="muted">—</span>';
+  return `<span class="badge-registrado humano">${escapeHtml(value)}</span>`;
+}
+
 function renderPromesas() {
   const summary = promesasData.summary || {};
   setText(
@@ -1722,14 +1729,14 @@ function renderPromesas() {
         <td>${monto}</td>
         <td><span class="status ${cls}">${label}</span></td>
         <td>${escapeHtml(row.asesor_nombre || "Sin asesor")}</td>
-        <td>${escapeHtml(row.registrado_por || "—")}</td>
+        <td>${registradoBadge(row.registrado_por)}</td>
         <td>${observ}</td>
         <td>
           <div class="row-actions">
-            ${estado !== "cumplida" ? '<button data-action="cumplir" title="Marcar cumplida">✓</button>' : ""}
-            ${estado !== "incumplida" ? '<button data-action="incumplir" title="Marcar incumplida">✗</button>' : ""}
-            <button data-action="editar" title="Editar">✎</button>
-            <button data-action="eliminar" class="row-danger" title="Eliminar">🗑</button>
+            ${estado !== "cumplida" ? '<button data-action="cumplir" class="act act-ok" title="Marcar cumplida">✓</button>' : ""}
+            ${estado !== "incumplida" ? '<button data-action="incumplir" class="act act-warn" title="Marcar incumplida">✗</button>' : ""}
+            <button data-action="editar" class="act" title="Editar">✎</button>
+            <button data-action="eliminar" class="act row-danger" title="Eliminar">🗑</button>
           </div>
         </td>
       </tr>
