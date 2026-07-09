@@ -2246,33 +2246,87 @@ function closeClientDrawer() {
   drawerNit = null;
 }
 
-async function triggerWhatsAppFlow(nit, button) {
+const WA_REASON_LABELS = {
+  CLIENTE_SIN_TELEFONO_VALIDO: "el cliente no tiene un teléfono válido",
+  CLIENTE_SIN_FACTURAS: "el cliente no tiene facturas abiertas",
+  TWILIO_ERROR: "error de envío en Twilio (revisar credenciales)",
+  FACTURA_FUERA_DE_RANGO_PROACTIVO: "la factura no está en un día de contacto del ciclo",
+  PLANTILLA_NO_CONFIGURADA: "no hay plantilla configurada para esta etapa",
+  CLIENTE_PLATAM_NO_GESTION_COPACOL: "cliente Platam: COPACOL no gestiona su cobro",
+};
+
+function humanizeWaReason(reason) {
+  return WA_REASON_LABELS[reason] || reason || "no se envió";
+}
+
+// Muestra el modal de confirmación de recontacto. Resuelve true si el usuario elige "Sí".
+function confirmRecontact(cliente) {
+  return new Promise((resolve) => {
+    const dlg = $("recontactModal");
+    if (!dlg) { resolve(window.confirm(`${cliente} ya fue contactado. ¿Recontactar?`)); return; }
+    setText("recontactText", `${cliente} ya fue contactado en esta etapa. ¿Seguro que deseas recontactar?`);
+    const yes = $("recontactYes");
+    const no = $("recontactNo");
+    const close = $("recontactClose");
+    const cleanup = (val) => {
+      yes.removeEventListener("click", onYes);
+      no.removeEventListener("click", onNo);
+      close.removeEventListener("click", onNo);
+      try { dlg.close(); } catch (e) {}
+      resolve(val);
+    };
+    const onYes = () => cleanup(true);
+    const onNo = () => cleanup(false);
+    yes.addEventListener("click", onYes);
+    no.addEventListener("click", onNo);
+    close.addEventListener("click", onNo);
+    dlg.showModal();
+  });
+}
+
+async function triggerWhatsAppFlow(nit, button, force = false) {
   if (!nit || !button) return;
-  const original = button.textContent;
+  const original = button.dataset.waLabel || button.textContent;
+  button.dataset.waLabel = original;
   const user = JSON.parse(sessionStorage.getItem("copacol_user") || "{}");
+  const reset = (ms) => setTimeout(() => {
+    button.textContent = original;
+    button.disabled = false;
+  }, ms);
   button.disabled = true;
-  button.textContent = "Enviando…";
+  button.textContent = force ? "Reenviando…" : "Enviando…";
   try {
     const res = await fetch(`/api/client/${encodeURIComponent(nit)}/whatsapp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requested_by: user.email || "dashboard" }),
+      body: JSON.stringify({ requested_by: user.email || "dashboard", force }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "No se pudo iniciar WhatsApp");
-    button.textContent = "Listo";
-    status(`WhatsApp preparado para ${data.cliente || nit}`);
-    setTimeout(() => {
+    const cliente = data.cliente || nit;
+    const reason = data.reason || (data.n8n && data.n8n.reason) || "";
+    const alreadyContacted = /YA_CONTACTADA|YA_ALERTADO/i.test(reason);
+
+    if (data.sent) {
+      button.textContent = "Enviado";
+      status(`WhatsApp enviado a ${cliente}${data.twilio_sid ? ` (${data.twilio_sid})` : ""}`);
+      reset(1800);
+      return;
+    }
+    if (alreadyContacted && !force) {
       button.textContent = original;
       button.disabled = false;
-    }, 1800);
+      const ok = await confirmRecontact(cliente);
+      if (ok) return triggerWhatsAppFlow(nit, button, true);
+      status("Reenvío cancelado.");
+      return;
+    }
+    // No se envió y no es por anti-spam → error real (Twilio, sin teléfono, etc.)
+    throw new Error(`No se envió: ${humanizeWaReason(reason)}`);
   } catch (err) {
     button.textContent = "Error";
     status(err.message);
-    setTimeout(() => {
-      button.textContent = original;
-      button.disabled = false;
-    }, 2400);
+    reset(2600);
   }
 }
 

@@ -3189,7 +3189,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                 payload = build_whatsapp_payload(nit, data.get("requested_by") or "dashboard")
+                if data.get("force") is True:
+                    payload["force"] = True
                 result = post_json_to_n8n(N8N_PROACTIVE_WEBHOOK_URL, payload)
+                twilio_sid = result.get("twilioSid")
                 json_response(self, 200, {
                     "status": result.get("status", "received"),
                     "message": result.get("message", "Contexto enviado al flujo proactivo."),
@@ -3198,6 +3201,9 @@ class Handler(BaseHTTPRequestHandler):
                     "cliente": payload["client"].get("razon_social"),
                     "telefono": payload.get("telefono"),
                     "via": "n8n",
+                    "sent": bool(twilio_sid),
+                    "twilio_sid": twilio_sid,
+                    "reason": result.get("reason"),
                     "n8n": result,
                 })
             except Exception as exc:
