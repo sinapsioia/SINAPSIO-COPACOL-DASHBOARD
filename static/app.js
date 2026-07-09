@@ -1652,7 +1652,61 @@ function showPage(page) {
   if (page === "historial" && !importHistory.length) loadImportHistory();
   if (page === "compromisos") loadPromesas();
   if (page === "asesores") loadAsesoresGestion();
+  if (page === "clientes") loadSchedulerStatus();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ── Bot proactivo: toggle de producción (Clientes) ──────────────────────────────
+async function loadSchedulerStatus() {
+  const input = $("schedulerToggle");
+  const state = $("schedulerToggleState");
+  if (!input || !state) return;
+  try {
+    const res = await fetch("/api/scheduler", { cache: "no-store" });
+    const data = await res.json();
+    if (!data.configured) {
+      input.checked = false;
+      input.disabled = true;
+      state.textContent = "no configurado";
+      state.className = "scheduler-state off";
+      return;
+    }
+    input.disabled = false;
+    input.checked = !!data.active;
+    state.textContent = data.active ? "activo" : "apagado";
+    state.className = "scheduler-state " + (data.active ? "on" : "off");
+  } catch (err) {
+    state.textContent = "error";
+    state.className = "scheduler-state off";
+  }
+}
+
+async function toggleScheduler() {
+  const input = $("schedulerToggle");
+  const state = $("schedulerToggleState");
+  if (!input || !state) return;
+  const desired = input.checked;
+  input.disabled = true;
+  state.textContent = desired ? "activando…" : "apagando…";
+  try {
+    const res = await fetch("/api/scheduler", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: desired }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo cambiar el estado del bot proactivo");
+    input.checked = !!data.active;
+    state.textContent = data.active ? "activo" : "apagado";
+    state.className = "scheduler-state " + (data.active ? "on" : "off");
+    status(data.active ? "Bot proactivo ACTIVADO · lun–vie 2:30–5pm" : "Bot proactivo apagado");
+  } catch (err) {
+    input.checked = !desired;
+    state.textContent = "error";
+    status(err.message);
+  } finally {
+    input.disabled = false;
+  }
 }
 
 // ── Compromisos de pago ───────────────────────────────────────────────────────
@@ -2605,6 +2659,8 @@ async function saveVentas30() {
 
 const editVentasBtn = $("editVentasBtn");
 if (editVentasBtn) editVentasBtn.addEventListener("click", openVentasModal);
+const schedulerToggleEl = $("schedulerToggle");
+if (schedulerToggleEl) schedulerToggleEl.addEventListener("change", toggleScheduler);
 $("ventasClose").addEventListener("click", () => $("ventasModal").close());
 $("ventasCancel").addEventListener("click", () => $("ventasModal").close());
 $("ventasSave").addEventListener("click", saveVentas30);

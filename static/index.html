@@ -600,7 +600,15 @@
               <h2>Clientes a gestionar</h2>
               <span id="clientCount" class="muted">-</span>
             </div>
-            <button id="noGestion5dBtn" type="button">Sin gestión 5d</button>
+            <div class="head-actions">
+              <label class="scheduler-toggle" id="schedulerToggleWrap" title="Envío proactivo automático: lun–vie 2:30–5pm, solo si la cartera se actualizó hoy y no es festivo">
+                <span class="scheduler-toggle-label">Bot proactivo</span>
+                <input type="checkbox" id="schedulerToggle" />
+                <span class="scheduler-switch" aria-hidden="true"></span>
+                <span id="schedulerToggleState" class="scheduler-state">—</span>
+              </label>
+              <button id="noGestion5dBtn" type="button">Sin gestión 5d</button>
+            </div>
           </div>
           <div class="client-grid" id="clientGrid"></div>
         </section>

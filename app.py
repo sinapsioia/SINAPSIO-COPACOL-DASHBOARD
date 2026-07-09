@@ -56,6 +56,35 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 N8N_API_TOKEN = os.environ.get("N8N_API_TOKEN", "")
 N8N_IMPORT_WEBHOOK_URL = os.environ.get("N8N_IMPORT_WEBHOOK_URL", "").strip()
 N8N_PROACTIVE_WEBHOOK_URL = os.environ.get("N8N_PROACTIVE_WEBHOOK_URL", "").strip()
+# n8n public API (para prender/apagar el scheduler proactivo desde el dashboard)
+N8N_API_URL = os.environ.get("N8N_API_URL", "").strip().rstrip("/")
+N8N_API_KEY = os.environ.get("N8N_API_KEY", "").strip()
+N8N_SCHEDULER_WORKFLOW_ID = os.environ.get("N8N_SCHEDULER_WORKFLOW_ID", "").strip()
+
+
+def n8n_scheduler_configured() -> bool:
+    return bool(N8N_API_URL and N8N_API_KEY and N8N_SCHEDULER_WORKFLOW_ID)
+
+
+def n8n_scheduler_status() -> dict:
+    if not n8n_scheduler_configured():
+        return {"configured": False, "active": False}
+    url = f"{N8N_API_URL}/api/v1/workflows/{N8N_SCHEDULER_WORKFLOW_ID}"
+    req = urllib.request.Request(url, headers={"X-N8N-API-KEY": N8N_API_KEY})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return {"configured": True, "active": bool(data.get("active"))}
+
+
+def n8n_scheduler_set(active: bool) -> dict:
+    if not n8n_scheduler_configured():
+        raise RuntimeError("Scheduler n8n no configurado (faltan N8N_API_URL / N8N_API_KEY / N8N_SCHEDULER_WORKFLOW_ID).")
+    action = "activate" if active else "deactivate"
+    url = f"{N8N_API_URL}/api/v1/workflows/{N8N_SCHEDULER_WORKFLOW_ID}/{action}"
+    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-N8N-API-KEY": N8N_API_KEY})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return {"configured": True, "active": bool(data.get("active"))}
 
 # In-memory cache for import previews pending confirmation
 IMPORT_CACHE: dict[str, dict] = {}
@@ -3162,8 +3191,16 @@ class Handler(BaseHTTPRequestHandler):
                     "import_mode": "n8n_required",
                     "n8n_proactive_enabled": bool(N8N_PROACTIVE_WEBHOOK_URL),
                     "ventas_30_dias": get_ventas_30_dias(),
+                    "scheduler_configured": n8n_scheduler_configured(),
                 },
             )
+            return
+
+        if parsed.path == "/api/scheduler":
+            try:
+                json_response(self, 200, n8n_scheduler_status())
+            except Exception as exc:
+                json_response(self, 200, {"configured": n8n_scheduler_configured(), "active": False, "error": str(exc)})
             return
 
         if parsed.path.startswith("/api/client/"):
@@ -3236,6 +3273,15 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 400, {"error": str(exc)})
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/scheduler":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                json_response(self, 200, n8n_scheduler_set(bool(data.get("active"))))
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
             return
 
         if parsed.path == "/api/config/ventas30":
