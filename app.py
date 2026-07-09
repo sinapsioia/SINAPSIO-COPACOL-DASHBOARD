@@ -81,9 +81,15 @@ def n8n_scheduler_set(active: bool) -> dict:
         raise RuntimeError("Scheduler n8n no configurado (faltan N8N_API_URL / N8N_API_KEY / N8N_SCHEDULER_WORKFLOW_ID).")
     action = "activate" if active else "deactivate"
     url = f"{N8N_API_URL}/api/v1/workflows/{N8N_SCHEDULER_WORKFLOW_ID}/{action}"
-    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-N8N-API-KEY": N8N_API_KEY})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    # POST sin cuerpo (como el curl). No pasar data=b"" para que urllib no agregue
+    # Content-Type form-urlencoded, que n8n rechaza con 415.
+    req = urllib.request.Request(url, method="POST", headers={"X-N8N-API-KEY": N8N_API_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+        raise RuntimeError(f"n8n respondió {exc.code} al {action}: {detail or exc.reason}")
     return {"configured": True, "active": bool(data.get("active"))}
 
 # In-memory cache for import previews pending confirmation
