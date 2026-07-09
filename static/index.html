@@ -205,9 +205,9 @@
               <small id="overduePctCard">-</small>
             </article>
             <article class="metric-card kpi-large">
-              <span>DSO COPACOL</span>
+              <span>DSO COPACOL <button id="editVentasBtn" class="link-btn" title="Editar ventas últimos 30 días">editar ventas</button></span>
               <strong id="kpiRotation">-</strong>
-              <small id="kpiRotationDetail">Promedio de recuperación COPACOL</small>
+              <small id="kpiRotationDetail">Días de cobro de toda la cartera COPACOL</small>
             </article>
           </div>
 
@@ -820,6 +820,27 @@
       <div class="contact-modal-actions">
         <button id="recontactNo" class="btn-secondary">No</button>
         <button id="recontactYes">Sí, recontactar</button>
+      </div>
+    </dialog>
+
+    <dialog id="ventasModal" class="contact-modal">
+      <div class="contact-modal-head">
+        <div>
+          <p class="eyebrow">DSO · Ventas de cobro</p>
+          <h2>Ventas acumuladas últimos 30 días</h2>
+        </div>
+        <button id="ventasClose" class="icon-btn" title="Cerrar">×</button>
+      </div>
+      <div class="contact-modal-body">
+        <p class="muted" style="margin:0 0 4px">DSO = (Cartera total COPACOL de hoy ÷ Ventas últimos 30 días) × 30. Ingresa el total de ventas de los últimos 30 días.</p>
+        <div class="form-group">
+          <label for="ventas30Input">Ventas últimos 30 días (COP)</label>
+          <input id="ventas30Input" type="number" min="0" step="1000" placeholder="0" />
+        </div>
+      </div>
+      <div class="contact-modal-actions">
+        <button id="ventasCancel" class="btn-secondary">Cancelar</button>
+        <button id="ventasSave">Guardar</button>
       </div>
     </dialog>
 

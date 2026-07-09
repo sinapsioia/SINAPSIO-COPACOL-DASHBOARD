@@ -618,8 +618,17 @@ function renderDashboard() {
   document.querySelectorAll(".semaforo-lights i").forEach((light) => {
     light.classList.toggle("active", light.dataset.light === semaforo.key);
   });
-  setText("kpiRotation", `${number.format(Math.round(copacol.rotacion_cartera_dias || 0))} días`);
-  setText("kpiRotationDetail", "Promedio ponderado de recuperación COPACOL");
+  // DSO = (Cartera total COPACOL de hoy / Ventas últimos 30 días) × 30
+  const ventas30 = Number((supabaseConfig && supabaseConfig.ventas_30_dias) || 0);
+  const carteraCopacol = amount(copacol.total_saldo);
+  const dsoDias = ventas30 > 0 ? (carteraCopacol / ventas30) * 30 : null;
+  setText("kpiRotation", dsoDias != null ? `${number.format(Math.round(dsoDias))} días` : "— días");
+  setText(
+    "kpiRotationDetail",
+    dsoDias != null
+      ? `Cartera COPACOL ÷ ventas 30d (${moneyFull(ventas30)}) × 30`
+      : "Falta registrar ventas de últimos 30 días · clic en “editar ventas”",
+  );
   requestAnimationFrame(fitMetricValues);
   const promesasResumen = dashboard.promesas_resumen || {};
   const gestionCobertura = dashboard.gestion_cobertura || {};
@@ -2549,6 +2558,49 @@ $("clearSelectedAdvisor")?.addEventListener("click", () => saveAdvisorManageSele
 $("cancelContact").addEventListener("click", () => $("contactModal").close());
 $("closeContactModal").addEventListener("click", () => $("contactModal").close());
 $("saveContact").addEventListener("click", saveContact);
+
+// ── DSO · Ventas últimos 30 días ────────────────────────────────────────────────
+function openVentasModal() {
+  const current = supabaseConfig && supabaseConfig.ventas_30_dias;
+  $("ventas30Input").value = current ? Math.round(Number(current)) : "";
+  $("ventasModal").showModal();
+}
+
+async function saveVentas30() {
+  const raw = Number($("ventas30Input").value);
+  if (!Number.isFinite(raw) || raw < 0) {
+    status("Ingresa un valor de ventas válido.");
+    return;
+  }
+  const btn = $("ventasSave");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Guardando…";
+  try {
+    const res = await fetch("/api/config/ventas30", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ventas_30_dias: raw }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "No se pudo guardar");
+    if (supabaseConfig) supabaseConfig.ventas_30_dias = data.ventas_30_dias;
+    $("ventasModal").close();
+    status("Ventas 30 días actualizadas · DSO recalculado.");
+    renderDashboard();
+  } catch (err) {
+    status(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+const editVentasBtn = $("editVentasBtn");
+if (editVentasBtn) editVentasBtn.addEventListener("click", openVentasModal);
+$("ventasClose").addEventListener("click", () => $("ventasModal").close());
+$("ventasCancel").addEventListener("click", () => $("ventasModal").close());
+$("ventasSave").addEventListener("click", saveVentas30);
 $("contactResultado").addEventListener("change", () => {
   const show = ["promesa", "pago_reportado"].includes($("contactResultado").value);
   $("promesaGroup").style.display = show ? "" : "none";

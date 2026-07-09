@@ -2347,6 +2347,60 @@ def build_client_payload(nit: str) -> dict:
     }
 
 
+def get_ventas_30_dias():
+    """Ventas acumuladas de los últimos 30 días (valor manual).
+
+    Se guarda en el metadata del corte más reciente. Con carry-forward:
+    si el último corte no lo tiene, se busca en cortes anteriores para no
+    perder el dato en cada importación semanal.
+    """
+    try:
+        batches = supabase_get(
+            "copacol_import_batches",
+            "select=metadata,imported_at&order=imported_at.desc&limit=30",
+        )
+    except Exception:
+        return None
+    for batch in batches:
+        meta = batch.get("metadata") or {}
+        try:
+            num = float(meta.get("ventas_30_dias"))
+        except (TypeError, ValueError):
+            continue
+        if num > 0:
+            return num
+    return None
+
+
+def set_ventas_30_dias(valor: float) -> float:
+    """Guarda el valor manual de ventas 30 días en el metadata del corte más reciente."""
+    batches = supabase_get(
+        "copacol_import_batches",
+        "select=id,metadata&order=imported_at.desc&limit=1",
+    )
+    if not batches:
+        raise ValueError("No hay cortes de cartera para asociar el valor de ventas.")
+    batch = batches[0]
+    meta = batch.get("metadata") or {}
+    meta["ventas_30_dias"] = valor
+    url = f"{SUPABASE_URL}/rest/v1/copacol_import_batches?id=eq.{batch['id']}"
+    body = json.dumps({"metadata": meta}, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="PATCH",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+    return valor
+
+
 def build_whatsapp_payload(nit: str, requested_by: str = "dashboard") -> dict:
     payload = build_client_payload(nit)
     client = payload.get("client") or {}
@@ -3107,6 +3161,7 @@ class Handler(BaseHTTPRequestHandler):
                     "n8n_import_enabled": bool(N8N_IMPORT_WEBHOOK_URL),
                     "import_mode": "n8n_required",
                     "n8n_proactive_enabled": bool(N8N_PROACTIVE_WEBHOOK_URL),
+                    "ventas_30_dias": get_ventas_30_dias(),
                 },
             )
             return
@@ -3181,6 +3236,21 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 400, {"error": str(exc)})
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/config/ventas30":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                valor = float(data.get("ventas_30_dias"))
+                if valor < 0:
+                    raise ValueError("El valor de ventas no puede ser negativo.")
+                saved = set_ventas_30_dias(valor)
+                json_response(self, 200, {"ventas_30_dias": saved})
+            except (TypeError, ValueError) as exc:
+                json_response(self, 400, {"error": f"Valor de ventas inválido: {exc}"})
+            except Exception as exc:
+                json_response(self, 400, {"error": str(exc)})
             return
 
         if parsed.path.startswith("/api/client/") and parsed.path.endswith("/whatsapp"):
