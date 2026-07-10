@@ -1720,6 +1720,16 @@ const promesaEstadoLabel = {
   incumplida: ["Incumplida", "critical"],
 };
 
+function normalizePromesaResponsable(value, fallback = "Bot") {
+  const raw = String(value || "").trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return fallback;
+  if (lower.includes("natalia")) return "Natalia";
+  if (lower.includes("eliza") || lower.includes("elizabeth")) return "Eliza";
+  if (lower.includes("bot") || lower.includes("dashboard") || lower.includes("sistema")) return "Bot";
+  return fallback;
+}
+
 async function loadPromesas() {
   const tbody = $("promesasTable");
   if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="muted">Cargando compromisos…</td></tr>';
@@ -1737,10 +1747,10 @@ async function loadPromesas() {
 }
 
 function registradoBadge(value) {
-  const s = String(value || "").trim().toLowerCase();
-  if (s === "bot") return '<span class="badge-registrado bot">🤖 Bot</span>';
-  if (!s) return '<span class="muted">—</span>';
-  return `<span class="badge-registrado humano">${escapeHtml(value)}</span>`;
+  const label = normalizePromesaResponsable(value, "");
+  if (!label) return '<span class="muted">—</span>';
+  if (label === "Bot") return '<span class="badge-registrado bot">🤖 Bot</span>';
+  return `<span class="badge-registrado humano">${escapeHtml(label)}</span>`;
 }
 
 function renderPromesas() {
@@ -1879,6 +1889,7 @@ function openPromesaModal(promesa = null, prefillNit = null) {
   $("promesaFecha").value = (promesa && promesa.fecha_promesa) || new Date().toISOString().slice(0, 10);
   $("promesaMonto").value = promesa ? Math.round(amount(promesa.monto_prometido)) : "";
   $("promesaObs").value = (promesa && promesa.observacion) || "";
+  $("promesaRegistradoPor").value = normalizePromesaResponsable(promesa && promesa.registrado_por);
   $("promesaStatusGroup").style.display = editing ? "" : "none";
   if (editing) $("promesaStatus").value = (promesa.status || "pendiente").toLowerCase();
   $("promesaModal").showModal();
@@ -1904,7 +1915,7 @@ async function savePromesaForm() {
     fecha_promesa: $("promesaFecha").value,
     monto_prometido: Number($("promesaMonto").value || 0),
     observacion: $("promesaObs").value.trim(),
-    registrado_por: JSON.parse(sessionStorage.getItem("copacol_user") || "{}").email || "dashboard",
+    registrado_por: normalizePromesaResponsable($("promesaRegistradoPor").value),
   };
   if (id) payload.status = $("promesaStatus").value;
   try {
