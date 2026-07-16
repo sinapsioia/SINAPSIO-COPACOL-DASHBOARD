@@ -1983,7 +1983,9 @@ def build_promesas_module_payload(status: str | None = None) -> dict:
                     continue
                 matching_payment = payment
                 break
-        if status_raw in {"cumplida", "completed", "paid"} or matching_payment:
+        if status_raw == "condicion_comercial":
+            estado = "condicion_comercial"
+        elif status_raw in {"cumplida", "completed", "paid"} or matching_payment:
             estado = "cumplida"
         elif status_raw in {"incumplida", "failed"}:
             estado = "incumplida"
@@ -1992,7 +1994,10 @@ def build_promesas_module_payload(status: str | None = None) -> dict:
         else:
             estado = "pendiente"
         counters["total"] += 1
-        counters[estado + "s"] = counters.get(estado + "s", 0) + 1
+        if estado in {"cumplida", "incumplida", "pendiente"}:
+            counters[estado + "s"] = counters.get(estado + "s", 0) + 1
+        else:
+            counters["condiciones_comerciales"] = counters.get("condiciones_comerciales", 0) + 1
         if status and status != "all" and estado != status:
             continue
         enriched.append({
@@ -2016,6 +2021,7 @@ def build_promesas_module_payload(status: str | None = None) -> dict:
             "cumplidas": counters.get("cumplidas", 0),
             "incumplidas": counters.get("incumplidas", 0),
             "pendientes": counters.get("pendientes", 0),
+            "condiciones_comerciales": counters.get("condiciones_comerciales", 0),
             "pct_cumplidas": pct_cumplidas,
         },
         "promises": enriched,

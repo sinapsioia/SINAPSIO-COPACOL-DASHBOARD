@@ -1718,6 +1718,7 @@ const promesaEstadoLabel = {
   pendiente: ["Pendiente", "warn"],
   cumplida: ["Cumplida", "ok"],
   incumplida: ["Incumplida", "critical"],
+  condicion_comercial: ["Condición comercial", "brand"],
 };
 
 function normalizePromesaResponsable(value, fallback = "Bot") {
