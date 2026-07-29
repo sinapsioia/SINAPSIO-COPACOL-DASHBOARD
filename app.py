@@ -1229,6 +1229,14 @@ def build_dashboard_payload() -> dict:
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
     )
+    # Mapa completo NIT -> nombre (todos los clientes, antes de cualquier filtro/scope).
+    # Evita que el Pareto muestre "Sin cliente" cuando el nombre existe pero el cliente
+    # quedó fuera del subconjunto filtrado.
+    all_client_name_by_nit = {
+        normalize_nit(c.get("nit")): c.get("razon_social")
+        for c in clients
+        if normalize_nit(c.get("nit")) and c.get("razon_social")
+    }
     invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,asesor_codigo,asesor_nombre,import_batch_id,created_at,updated_at"
     try:
         invoices = fetch_all(
@@ -1334,6 +1342,9 @@ def build_dashboard_payload() -> dict:
     advisor_overrides = advisor_overrides_by_nit()
     if advisor_overrides:
         clients = [apply_advisor_override(client, advisor_overrides) for client in clients]
+    condition_overrides = condition_overrides_by_nit()
+    if condition_overrides:
+        clients = [apply_condition_override(client, condition_overrides) for client in clients]
 
     last_update_candidates = [
         row.get("updated_at") or row.get("created_at") or ""
@@ -1663,7 +1674,9 @@ def build_dashboard_payload() -> dict:
 
         scoped_clients = []
         for nit_key, values in stats.items():
-            base = base_by_nit.get(nit_key, {"nit": nit_key, "razon_social": "Sin cliente"})
+            base = base_by_nit.get(nit_key)
+            if not base:
+                base = {"nit": nit_key, "razon_social": all_client_name_by_nit.get(nit_key) or "Sin cliente"}
             days_values = values["dias"] or [0]
             positive_days = [day for day in days_values if day > 0]
             dias_max = max(positive_days) if positive_days else max(days_values)
@@ -2196,6 +2209,81 @@ def advisor_overrides_by_nit() -> dict[str, dict]:
     return overrides
 
 
+CONDICIONES_VALIDAS = {"contado", "credito_45d", "credito_60d"}
+
+
+def condition_overrides_by_nit() -> dict[str, dict]:
+    try:
+        rows = fetch_all(
+            "copacol_client_condition_overrides",
+            "nit,condicion_pago,activo,motivo,updated_by,source,updated_at",
+            "updated_at.desc",
+            page_size=5000,
+        )
+    except Exception:
+        return {}
+    overrides: dict[str, dict] = {}
+    for row in rows:
+        nit = normalize_nit(row.get("nit"))
+        if not nit or row.get("activo") is False:
+            continue
+        overrides[nit] = row
+    return overrides
+
+
+def apply_condition_override(row: dict, overrides: dict[str, dict]) -> dict:
+    nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
+    override = overrides.get(nit)
+    if not override or not override.get("condicion_pago"):
+        return row
+    return {
+        **row,
+        "condicion_pago_original": row.get("condicion_pago"),
+        "condicion_pago": override.get("condicion_pago"),
+        "tiene_override_condicion": True,
+        "condicion_override_updated_at": override.get("updated_at"),
+    }
+
+
+def update_client_condicion(nit: str, payload: dict) -> dict:
+    nit = normalize_nit(nit)
+    if not nit:
+        raise ValueError("NIT requerido.")
+    cond = (payload.get("condicion_pago") or "").strip()
+    if cond not in CONDICIONES_VALIDAS:
+        raise ValueError("Condición inválida. Use: contado, credito_45d o credito_60d.")
+    row = {
+        "nit": nit,
+        "condicion_pago": cond,
+        "activo": True,
+        "motivo": (payload.get("motivo") or "dashboard").strip() or "dashboard",
+        "updated_by": (payload.get("updated_by") or "dashboard").strip() or "dashboard",
+        "source": "dashboard",
+    }
+    # Efecto inmediato: aplicar la condicion tambien en copacol_clients para que el
+    # bot (que lee condicion_pago directo) la tome sin esperar la proxima carga.
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/copacol_clients?nit=eq.{urllib.parse.quote(nit)}"
+        body = json.dumps({"condicion_pago": cond}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="PATCH", headers={
+            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json", "Prefer": "return=minimal",
+        })
+        urllib.request.urlopen(req, timeout=20).read()
+    except Exception:
+        pass
+    # Persistencia (sobrevive a las cargas de Siigo). Requiere la tabla override.
+    try:
+        result = supabase_upsert("copacol_client_condition_overrides", row, "nit")
+    except Exception as exc:
+        raise RuntimeError(
+            "Condición aplicada por ahora, pero falta crear la tabla de overrides "
+            "(ejecutar supabase_condition_overrides.sql en Supabase) para que persista "
+            "tras las cargas de cartera."
+        ) from exc
+    return result[0] if isinstance(result, list) and result else row
+
+
 def apply_advisor_override(row: dict, overrides: dict[str, dict]) -> dict:
     nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
     override = overrides.get(nit)
@@ -2413,6 +2501,9 @@ def build_client_payload(nit: str) -> dict:
     overrides = advisor_overrides_by_nit()
     if client:
         client = apply_advisor_override(client, overrides)
+        _cond_ov = condition_overrides_by_nit()
+        if _cond_ov:
+            client = apply_condition_override(client, _cond_ov)
 
     inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
     invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
@@ -3598,6 +3689,18 @@ Reglas de respuesta:
             try:
                 data = json.loads(raw_body.decode("utf-8") or "{}")
                 result = update_client_asesor(nit, data)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/condicion"):
+            nit = parsed.path[len("/api/client/"):-len("/condicion")]
+            try:
+                data = json.loads(raw_body.decode("utf-8") or "{}")
+                result = update_client_condicion(nit, data)
                 json_response(self, 200, {"status": "ok", "data": result})
             except ValueError as exc:
                 json_response(self, 400, {"error": str(exc)})

@@ -1969,6 +1969,61 @@ function populateAsesorSelect(current = "") {
       .join("");
 }
 
+function openCondicionModal(nit, name, current) {
+  const user = JSON.parse(sessionStorage.getItem("copacol_user") || "{}");
+  const opciones = [
+    { v: "contado", label: "Contado" },
+    { v: "credito_45d", label: "Crédito 45 días" },
+    { v: "credito_60d", label: "Crédito 60 días" },
+  ];
+  const dlg = document.createElement("dialog");
+  dlg.className = "contact-modal";
+  dlg.innerHTML = `
+    <div class="contact-modal-head">
+      <div><p class="eyebrow">Condición de crédito</p><h2>${escapeHtml(name)}</h2></div>
+      <button class="icon-btn" data-x>×</button>
+    </div>
+    <div class="contact-modal-body">
+      <p class="muted" style="margin:0 0 8px">Condición actual: <strong>${conditionLabel(current)}</strong>. Cambiarla afecta a quién contacta el bot proactivo (solo 45 y 60 días).</p>
+      <div class="form-group">
+        <label for="condicionSelect">Nueva condición</label>
+        <select id="condicionSelect">
+          ${opciones.map((o) => `<option value="${o.v}" ${o.v === current ? "selected" : ""}>${o.label}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="contact-modal-actions">
+      <button class="btn-secondary" data-x>Cancelar</button>
+      <button data-save>Guardar</button>
+    </div>`;
+  document.body.appendChild(dlg);
+  const close = () => { try { dlg.close(); } catch (e) {} dlg.remove(); };
+  dlg.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", close));
+  dlg.querySelector("[data-save]").addEventListener("click", async () => {
+    const cond = dlg.querySelector("#condicionSelect").value;
+    const btn = dlg.querySelector("[data-save]");
+    btn.disabled = true;
+    btn.textContent = "Guardando…";
+    try {
+      const res = await fetch(`/api/client/${encodeURIComponent(nit)}/condicion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ condicion_pago: cond, updated_by: user.email || "dashboard" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo cambiar la condición");
+      close();
+      status(`Condición actualizada a ${conditionLabel(cond)}`);
+      openClientDrawer(nit);
+    } catch (err) {
+      status(err.message);
+      btn.disabled = false;
+      btn.textContent = "Guardar";
+    }
+  });
+  dlg.showModal();
+}
+
 async function openAsesorModal(nit, clientName, currentCodigo, currentNombre) {
   if (!asesoresCatalog.length) await loadAsesoresCatalog();
   $("asesorNit").value = nit;
@@ -2275,6 +2330,7 @@ function renderDrawer(payload) {
       <button class="drawer-action-btn" id="registerGestionBtn">+ Registrar gestión</button>
       <button class="drawer-action-btn" id="registerPromesaBtn">+ Registrar promesa</button>
       <button class="drawer-action-btn" id="changeAsesorBtn">Cambiar asesor</button>
+      <button class="drawer-action-btn" id="changeCondicionBtn">Cambiar condición</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
       ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
     </div>`;
@@ -2317,6 +2373,9 @@ function renderDrawer(payload) {
   });
   $("changeAsesorBtn").addEventListener("click", () => {
     openAsesorModal(client.nit, name, client.asesor_codigo || "", client.asesor_nombre || "");
+  });
+  $("changeCondicionBtn").addEventListener("click", () => {
+    openCondicionModal(client.nit, name, client.condicion_pago || "");
   });
   const waBtn = $("triggerWhatsAppBtn");
   if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
