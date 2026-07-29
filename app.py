@@ -346,7 +346,67 @@ def aging_overdue_total(aging: dict) -> float:
 def is_uncatalogued_seller(row: dict) -> bool:
     code = str(row.get("asesor_codigo") or row.get("vendedor_codigo") or "").strip()
     name = str(row.get("asesor_nombre") or row.get("vendedor_nombre") or "").strip().upper()
-    return code == "0" or "NO CATALOGADO" in name
+    return normalize_advisor_code(code) == "0" or "NO CATALOGADO" in name
+
+
+def normalize_advisor_code(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    numeric = re.fullmatch(r"(\d+)(?:\.0+)?", raw)
+    if numeric:
+        return numeric.group(1).lstrip("0") or "0"
+    return raw.upper()
+
+
+def advisor_display_code(value: object) -> str:
+    normalized = normalize_advisor_code(value)
+    if not normalized:
+        return ""
+    if normalized.isdigit():
+        return normalized.zfill(4)
+    return normalized
+
+
+def build_advisor_catalog(clients: list[dict], invoices: list[dict]) -> dict[str, dict]:
+    candidates: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in [*clients, *invoices]:
+        code = normalize_advisor_code(row.get("asesor_codigo") or row.get("vendedor_codigo"))
+        name = str(row.get("asesor_nombre") or row.get("vendedor_nombre") or "").strip()
+        if code and name:
+            candidates[code][name] += 1
+
+    catalog: dict[str, dict] = {}
+    for code, names in candidates.items():
+        name = max(names.items(), key=lambda item: (item[1], item[0]))[0]
+        catalog[code] = {"codigo": advisor_display_code(code), "nombre": name}
+    return catalog
+
+
+def apply_master_advisor(row: dict, credit_lookup: dict[str, dict], advisor_catalog: dict[str, dict]) -> dict:
+    nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
+    credit_term = credit_lookup.get(nit)
+    master_code = normalize_advisor_code((credit_term or {}).get("vendedor_codigo"))
+    if not master_code or (credit_term or {}).get("activo") is False:
+        if row.get("asesor_codigo") or row.get("asesor_nombre"):
+            return {**row, "asesor_fuente": row.get("asesor_fuente") or "cliente"}
+        return row
+
+    catalog_entry = advisor_catalog.get(master_code) or {}
+    display_code = catalog_entry.get("codigo") or advisor_display_code(master_code)
+    display_name = catalog_entry.get("nombre")
+    if not display_name:
+        display_name = "VENDEDOR NO CATALOGADO" if master_code == "0" else f"ASESOR COD. {display_code}"
+    return {
+        **row,
+        "asesor_codigo_original": row.get("asesor_codigo") or row.get("vendedor_codigo"),
+        "asesor_nombre_original": row.get("asesor_nombre") or row.get("vendedor_nombre"),
+        "asesor_codigo": display_code,
+        "asesor_nombre": display_name,
+        "vendedor_codigo": display_code,
+        "vendedor_nombre": display_name,
+        "asesor_fuente": "terceros",
+    }
 
 
 def allowed_siigo_account(value: str) -> bool:
@@ -373,16 +433,22 @@ def account_matches(row: dict, accounts: set[str], *, include_missing: bool = Fa
 
 def invoice_seller(invoice: dict, client: dict | None = None) -> tuple[str, str]:
     client = client or {}
+    if client.get("tiene_override_asesor"):
+        code = client.get("asesor_codigo") or "sin_codigo"
+        name = client.get("asesor_nombre") or "Sin asesor"
+        return str(code).strip() or "sin_codigo", str(name).strip() or "Sin asesor"
     code = (
-        invoice.get("asesor_codigo")
+        client.get("asesor_codigo")
+        or client.get("vendedor_codigo")
+        or invoice.get("asesor_codigo")
         or invoice.get("vendedor_codigo")
-        or client.get("asesor_codigo")
         or "sin_codigo"
     )
     name = (
-        invoice.get("asesor_nombre")
+        client.get("asesor_nombre")
+        or client.get("vendedor_nombre")
+        or invoice.get("asesor_nombre")
         or invoice.get("vendedor_nombre")
-        or client.get("asesor_nombre")
         or "Sin asesor"
     )
     return str(code).strip() or "sin_codigo", str(name).strip() or "Sin asesor"
@@ -1261,6 +1327,10 @@ def build_dashboard_payload() -> dict:
                 lambda row: row.get("id") or f"{row.get('nit')}::{row.get('numero_factura')}",
             )
 
+    credit_lookup = {normalize_nit(term.get("nit")): term for term in credit_terms if normalize_nit(term.get("nit"))}
+    advisor_catalog = build_advisor_catalog(clients, invoices)
+    clients = [apply_master_advisor(client, credit_lookup, advisor_catalog) for client in clients]
+
     advisor_overrides = advisor_overrides_by_nit()
     if advisor_overrides:
         clients = [apply_advisor_override(client, advisor_overrides) for client in clients]
@@ -1272,8 +1342,11 @@ def build_dashboard_payload() -> dict:
     override_update_candidates = [row.get("updated_at") or "" for row in advisor_overrides.values()]
     ultima_actualizacion = max([latest_batch.get("imported_at") or "", *last_update_candidates, *override_update_candidates])
 
-    client_lookup = {client.get("nit"): client for client in clients}
-    credit_lookup = {normalize_nit(term.get("nit")): term for term in credit_terms if normalize_nit(term.get("nit"))}
+    client_lookup = {
+        normalize_nit(client.get("nit")): client
+        for client in clients
+        if normalize_nit(client.get("nit"))
+    }
     client_stats: dict[str, dict] = defaultdict(
         lambda: {
             "saldo": 0.0,
@@ -1293,7 +1366,11 @@ def build_dashboard_payload() -> dict:
     saldo_neto = 0.0
     saldos_a_favor = 0.0
     enriched_invoices = []
-    manual_client_by_nit = {client.get("nit"): client for client in manual_clients if client.get("nit")}
+    manual_client_by_nit = {}
+    for manual_client in manual_clients:
+        manual_nit = normalize_nit(manual_client.get("nit"))
+        if manual_nit:
+            manual_client_by_nit[manual_nit] = client_lookup.get(manual_nit, manual_client)
     client_total_overrides = manual_client_by_nit
 
     for client in clients:
@@ -1314,7 +1391,8 @@ def build_dashboard_payload() -> dict:
         by_city[city_label(client.get("ciudad"))] += money(client.get("total_saldo"))
 
     for invoice in invoices:
-        client = client_lookup.get(invoice.get("nit"), {})
+        normalized_invoice_nit = normalize_nit(invoice.get("nit"))
+        client = client_lookup.get(normalized_invoice_nit, {})
         credit_term = credit_lookup.get(normalize_nit(invoice.get("nit"))) or credit_lookup.get(normalize_nit(client.get("nit")))
         condition_key = (credit_term or {}).get("condicion_key") or credit_condition_key(
             (credit_term or {}).get("plazo_pago_real"),
@@ -1325,7 +1403,7 @@ def build_dashboard_payload() -> dict:
             saldos_a_favor += abs(amount)
             condition_key = "saldos_a_favor"
         days = money(invoice.get("dias_mora"))
-        nit = invoice.get("nit")
+        nit = normalized_invoice_nit
         invoice_seller_code, invoice_seller_name = invoice_seller(invoice, client)
         if nit in client_total_overrides:
             enriched_invoices.append(
@@ -1343,6 +1421,7 @@ def build_dashboard_payload() -> dict:
                     "cupo_credito": (credit_term or {}).get("cupo_credito"),
                     "observacion_credito": (credit_term or {}).get("observacion"),
                     "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
+                    "asesor_fuente": client.get("asesor_fuente") or "factura",
                     "manual_client_override": True,
                 }
             )
@@ -1404,6 +1483,7 @@ def build_dashboard_payload() -> dict:
                 "cupo_credito": (credit_term or {}).get("cupo_credito"),
                 "observacion_credito": (credit_term or {}).get("observacion"),
                 "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
+                "asesor_fuente": client.get("asesor_fuente") or "factura",
             }
         )
 
@@ -2130,6 +2210,7 @@ def apply_advisor_override(row: dict, overrides: dict[str, dict]) -> dict:
         "vendedor_codigo": override.get("asesor_codigo"),
         "vendedor_nombre": override.get("asesor_nombre"),
         "tiene_override_asesor": True,
+        "asesor_fuente": "override",
         "advisor_override_updated_at": override.get("updated_at"),
     }
 
