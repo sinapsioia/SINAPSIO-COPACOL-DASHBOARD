@@ -383,11 +383,30 @@ def build_advisor_catalog(clients: list[dict], invoices: list[dict]) -> dict[str
     return catalog
 
 
-def apply_master_advisor(row: dict, credit_lookup: dict[str, dict], advisor_catalog: dict[str, dict]) -> dict:
+def has_current_advisor(row: dict) -> bool:
+    code = normalize_advisor_code(row.get("asesor_codigo") or row.get("vendedor_codigo"))
+    name = str(row.get("asesor_nombre") or row.get("vendedor_nombre") or "").strip().upper()
+    missing_codes = {"0", "SIN_CODIGO", "SIN CODIGO", "NONE", "NULL"}
+    return bool(code and code not in missing_codes and "NO CATALOGADO" not in name)
+
+
+def active_credit_term(row: dict | None) -> bool:
+    if not row or row.get("activo") is None:
+        return bool(row)
+    value = row.get("activo")
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().upper() in {"1", "A", "ACTIVO", "S", "SI", "TRUE"}
+
+
+def apply_advisor_fallback(row: dict, credit_lookup: dict[str, dict], advisor_catalog: dict[str, dict]) -> dict:
+    if has_current_advisor(row):
+        return {**row, "asesor_fuente": row.get("asesor_fuente") or "cartera_actual"}
+
     nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
     credit_term = credit_lookup.get(nit)
     master_code = normalize_advisor_code((credit_term or {}).get("vendedor_codigo"))
-    if not master_code or (credit_term or {}).get("activo") is False:
+    if not master_code or not active_credit_term(credit_term):
         if row.get("asesor_codigo") or row.get("asesor_nombre"):
             return {**row, "asesor_fuente": row.get("asesor_fuente") or "cliente"}
         return row
@@ -405,7 +424,7 @@ def apply_master_advisor(row: dict, credit_lookup: dict[str, dict], advisor_cata
         "asesor_nombre": display_name,
         "vendedor_codigo": display_code,
         "vendedor_nombre": display_name,
-        "asesor_fuente": "terceros",
+        "asesor_fuente": "terceros_fallback",
     }
 
 
@@ -1337,7 +1356,7 @@ def build_dashboard_payload() -> dict:
 
     credit_lookup = {normalize_nit(term.get("nit")): term for term in credit_terms if normalize_nit(term.get("nit"))}
     advisor_catalog = build_advisor_catalog(clients, invoices)
-    clients = [apply_master_advisor(client, credit_lookup, advisor_catalog) for client in clients]
+    clients = [apply_advisor_fallback(client, credit_lookup, advisor_catalog) for client in clients]
 
     advisor_overrides = advisor_overrides_by_nit()
     if advisor_overrides:

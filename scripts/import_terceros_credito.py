@@ -156,9 +156,27 @@ def dedupe_by_nit(rows: list[dict]) -> list[dict]:
     deduped: dict[str, dict] = {}
     for row in rows:
         nit = row.get("nit")
-        if nit:
+        if not nit:
+            continue
+        current = deduped.get(nit)
+        if current is None:
+            deduped[nit] = row
+            continue
+        current_branch = normalize_text(current.get("sucursal"))
+        candidate_branch = normalize_text(row.get("sucursal"))
+        if candidate_branch == "0" and current_branch != "0":
             deduped[nit] = row
     return list(deduped.values())
+
+
+def conflicting_nits(rows: list[dict], field: str) -> list[str]:
+    values_by_nit: dict[str, set[str]] = {}
+    for row in rows:
+        nit = row.get("nit")
+        value = normalize_text(row.get(field))
+        if nit and value:
+            values_by_nit.setdefault(nit, set()).add(value)
+    return sorted(nit for nit, values in values_by_nit.items() if len(values) > 1)
 
 
 def chunks(rows: list[dict], size: int = 500):
@@ -199,9 +217,23 @@ def main() -> int:
     unique_rows = dedupe_by_nit(rows)
     counts = Counter(row["condicion_key"] for row in rows)
     unique_counts = Counter(row["condicion_key"] for row in unique_rows)
+    seller_conflicts = conflicting_nits(rows, "vendedor_codigo")
+    term_conflicts = conflicting_nits(rows, "plazo_pago_real")
     print(f"Archivo: {path}")
     print(f"Terceros leídos: {len(rows)}")
     print(f"Terceros únicos por NIT: {len(unique_rows)}")
+    if seller_conflicts:
+        print(
+            "Advertencia: "
+            f"{len(seller_conflicts)} NIT tienen vendedores diferentes entre sucursales. "
+            "Se conservó la sucursal principal 0."
+        )
+    if term_conflicts:
+        print(
+            "Advertencia: "
+            f"{len(term_conflicts)} NIT tienen plazos diferentes entre sucursales. "
+            "Se conservó la sucursal principal 0."
+        )
     for key, count in counts.most_common():
         print(f"- {key}: {count} leídos · {unique_counts.get(key, 0)} únicos")
     if dry_run:

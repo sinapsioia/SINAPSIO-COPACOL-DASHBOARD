@@ -10,20 +10,20 @@ class AdvisorResolutionTests(unittest.TestCase):
             "33": {"codigo": "0033", "nombre": "GUSTAVO ALDOLFO GOMEZ CAMAYO"},
         }
 
-    def test_master_seller_replaces_stale_client_and_invoice_seller(self):
+    def test_current_portfolio_seller_wins_over_older_third_party_record(self):
         client = {"nit": "1089718173", "asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"}
         terms = {"1089718173": {"nit": "1089718173", "activo": True, "vendedor_codigo": "33"}}
 
-        resolved = app.apply_master_advisor(client, terms, self.catalog)
+        resolved = app.apply_advisor_fallback(client, terms, self.catalog)
         code, name = app.invoice_seller(
             {"asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"},
             resolved,
         )
 
-        self.assertEqual(("0033", "GUSTAVO ALDOLFO GOMEZ CAMAYO"), (code, name))
-        self.assertEqual("terceros", resolved["asesor_fuente"])
+        self.assertEqual(("0018", "JHON JAIRO CARMONA"), (code, name))
+        self.assertEqual("cartera_actual", resolved["asesor_fuente"])
 
-    def test_manual_override_wins_over_master_seller(self):
+    def test_manual_override_wins_over_current_portfolio_seller(self):
         client = {"nit": "1089718173", "asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"}
         terms = {"1089718173": {"nit": "1089718173", "activo": True, "vendedor_codigo": "33"}}
         overrides = {
@@ -34,7 +34,7 @@ class AdvisorResolutionTests(unittest.TestCase):
             }
         }
 
-        from_master = app.apply_master_advisor(client, terms, self.catalog)
+        from_master = app.apply_advisor_fallback(client, terms, self.catalog)
         resolved = app.apply_advisor_override(from_master, overrides)
 
         self.assertEqual(("0019", "CAROLINA CHARRIA DIAZ"), app.invoice_seller({}, resolved))
@@ -60,18 +60,27 @@ class AdvisorResolutionTests(unittest.TestCase):
         }
         invoice = {"asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"}
 
-        resolved = app.apply_master_advisor(client, {}, self.catalog)
+        resolved = app.apply_advisor_fallback(client, {}, self.catalog)
 
         self.assertEqual(("0000", "VENDEDOR NO CATALOGADO"), app.invoice_seller(invoice, resolved))
         self.assertEqual("cliente", resolved["asesor_fuente"])
 
-    def test_unknown_master_code_remains_traceable(self):
-        client = {"nit": "6105598", "asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"}
+    def test_unknown_fallback_code_remains_traceable(self):
+        client = {"nit": "6105598", "asesor_codigo": "sin_codigo", "asesor_nombre": "Sin asesor"}
         terms = {"6105598": {"nit": "6105598", "activo": True, "vendedor_codigo": "36"}}
 
-        resolved = app.apply_master_advisor(client, terms, self.catalog)
+        resolved = app.apply_advisor_fallback(client, terms, self.catalog)
 
         self.assertEqual(("0036", "ASESOR COD. 0036"), app.invoice_seller({}, resolved))
+        self.assertEqual("terceros_fallback", resolved["asesor_fuente"])
+
+    def test_inactive_third_party_record_is_not_used_as_fallback(self):
+        client = {"nit": "6105598", "asesor_codigo": None, "asesor_nombre": None}
+        terms = {"6105598": {"nit": "6105598", "activo": "I", "vendedor_codigo": "36"}}
+
+        resolved = app.apply_advisor_fallback(client, terms, self.catalog)
+
+        self.assertEqual(("sin_codigo", "Sin asesor"), app.invoice_seller({}, resolved))
 
     def test_invoice_is_only_used_when_client_has_no_assignment(self):
         invoice = {"asesor_codigo": "0018", "asesor_nombre": "JHON JAIRO CARMONA"}
