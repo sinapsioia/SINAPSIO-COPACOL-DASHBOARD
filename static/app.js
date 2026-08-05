@@ -2011,7 +2011,7 @@ function openCondicionModal(nit, name, current) {
     btn.textContent = "Guardando…";
     try {
       const res = await fetch(`/api/client/${encodeURIComponent(nit)}/condicion`, {
-        method: "POST",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ condicion_pago: cond, updated_by: user.email || "dashboard" }),
       });

@@ -3586,8 +3586,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def handle_client_mutation(self, parsed, raw_body: bytes) -> bool:
+        """Rutas de edicion de cliente, atendidas igual por POST y por PATCH.
+
+        /condicion se registro solo en PATCH mientras el frontend la llamaba por
+        POST, asi que devolvia 404 y el cambio nunca se guardaba. Aceptar ambos
+        verbos evita que un app.js cacheado en el navegador vuelva a romperlo.
+        """
+        if not parsed.path.startswith("/api/client/"):
+            return False
+        handlers = (
+            ("/asesor", update_client_asesor),
+            ("/condicion", update_client_condicion),
+            ("/telefono", update_client_contacto),
+        )
+        for suffix, handler in handlers:
+            if not parsed.path.endswith(suffix):
+                continue
+            nit = parsed.path[len("/api/client/"):-len(suffix)]
+            try:
+                data = json.loads(raw_body.decode("utf-8") or "{}")
+                json_response(self, 200, {"status": "ok", "data": handler(nit, data)})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return True
+        return False
+
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path.startswith("/api/client/") and not parsed.path.endswith(("/contacto", "/whatsapp")):
+            length = int(self.headers.get("Content-Length", "0"))
+            if self.handle_client_mutation(parsed, self.rfile.read(length) if length else b""):
+                return
 
         if parsed.path == "/api/import/confirm":
             length = int(self.headers.get("Content-Length", "0"))
@@ -3859,40 +3892,7 @@ Reglas de respuesta:
                 json_response(self, 500, {"error": str(exc)})
             return
 
-        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/asesor"):
-            nit = parsed.path[len("/api/client/"):-len("/asesor")]
-            try:
-                data = json.loads(raw_body.decode("utf-8") or "{}")
-                result = update_client_asesor(nit, data)
-                json_response(self, 200, {"status": "ok", "data": result})
-            except ValueError as exc:
-                json_response(self, 400, {"error": str(exc)})
-            except Exception as exc:
-                json_response(self, 500, {"error": str(exc)})
-            return
-
-        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/condicion"):
-            nit = parsed.path[len("/api/client/"):-len("/condicion")]
-            try:
-                data = json.loads(raw_body.decode("utf-8") or "{}")
-                result = update_client_condicion(nit, data)
-                json_response(self, 200, {"status": "ok", "data": result})
-            except ValueError as exc:
-                json_response(self, 400, {"error": str(exc)})
-            except Exception as exc:
-                json_response(self, 500, {"error": str(exc)})
-            return
-
-        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/telefono"):
-            nit = parsed.path[len("/api/client/"):-len("/telefono")]
-            try:
-                data = json.loads(raw_body.decode("utf-8") or "{}")
-                result = update_client_contacto(nit, data)
-                json_response(self, 200, {"status": "ok", "data": result})
-            except ValueError as exc:
-                json_response(self, 400, {"error": str(exc)})
-            except Exception as exc:
-                json_response(self, 500, {"error": str(exc)})
+        if self.handle_client_mutation(parsed, raw_body):
             return
 
         json_response(self, 404, {"error": "Not found"})
