@@ -1364,6 +1364,9 @@ def build_dashboard_payload() -> dict:
     condition_overrides = condition_overrides_by_nit()
     if condition_overrides:
         clients = [apply_condition_override(client, condition_overrides) for client in clients]
+    contact_overrides = contact_overrides_by_nit()
+    if contact_overrides:
+        clients = [apply_contact_override(client, contact_overrides) for client in clients]
 
     last_update_candidates = [
         row.get("updated_at") or row.get("created_at") or ""
@@ -1428,6 +1431,9 @@ def build_dashboard_payload() -> dict:
             (credit_term or {}).get("plazo_pago_real"),
             (credit_term or {}).get("observacion") or invoice.get("condicion_pago"),
         )
+        condition_key, condition_plazo = resolve_client_condition(
+            client, condition_key, (credit_term or {}).get("plazo_pago_real")
+        )
         amount = money(invoice.get("monto"))
         if amount < 0:
             saldos_a_favor += abs(amount)
@@ -1447,7 +1453,7 @@ def build_dashboard_payload() -> dict:
                     "telefono_2": client.get("telefono_2") or "",
                     "aging_bucket": aging_bucket(days),
                     "condicion_pago_real": condition_key,
-                    "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                    "plazo_pago_real": condition_plazo,
                     "cupo_credito": (credit_term or {}).get("cupo_credito"),
                     "observacion_credito": (credit_term or {}).get("observacion"),
                     "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
@@ -1509,7 +1515,7 @@ def build_dashboard_payload() -> dict:
                 "telefono_2": client.get("telefono_2") or "",
                 "aging_bucket": bucket,
                 "condicion_pago_real": condition_key,
-                "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                "plazo_pago_real": condition_plazo,
                 "cupo_credito": (credit_term or {}).get("cupo_credito"),
                 "observacion_credito": (credit_term or {}).get("observacion"),
                 "tiene_override_asesor": bool(client.get("tiene_override_asesor")),
@@ -1522,6 +1528,9 @@ def build_dashboard_payload() -> dict:
         condition_key = (credit_term or {}).get("condicion_key") or credit_condition_key(
             (credit_term or {}).get("plazo_pago_real"),
             (credit_term or {}).get("observacion") or client.get("condicion_pago"),
+        )
+        condition_key, _ = resolve_client_condition(
+            client, condition_key, (credit_term or {}).get("plazo_pago_real")
         )
         saldo = money(client.get("total_saldo"))
         vencido = money(client.get("total_vencido"))
@@ -1589,7 +1598,11 @@ def build_dashboard_payload() -> dict:
     enriched_clients = []
     for client in clients:
         credit_term = credit_lookup.get(normalize_nit(client.get("nit")))
-        condition_key = (credit_term or {}).get("condicion_key") or "sin_condicion_real"
+        condition_key, condition_plazo = resolve_client_condition(
+            client,
+            (credit_term or {}).get("condicion_key"),
+            (credit_term or {}).get("plazo_pago_real"),
+        )
         stats = client_stats.get(client.get("nit"), {})
         saldo = money(stats.get("saldo")) or money(client.get("total_saldo"))
         vencido = money(stats.get("vencido"))
@@ -1606,7 +1619,7 @@ def build_dashboard_payload() -> dict:
                 "total_saldo": saldo,
                 "total_vencido": vencido,
                 "total_vigente": money(stats.get("vigente")),
-                "plazo_pago_real": (credit_term or {}).get("plazo_pago_real"),
+                "plazo_pago_real": condition_plazo,
                 "condicion_pago_real": condition_key,
                 "condicion_credito": (credit_term or {}).get("condicion_credito"),
                 "cupo_credito": (credit_term or {}).get("cupo_credito"),
@@ -2230,6 +2243,23 @@ def advisor_overrides_by_nit() -> dict[str, dict]:
 
 CONDICIONES_VALIDAS = {"contado", "credito_45d", "credito_60d"}
 
+# Plazo implicito de cada condicion manual. Sirve para que la ficha muestre un
+# plazo coherente con la condicion elegida y no el del maestro de terceros.
+CONDICION_PLAZO_DIAS = {"contado": 1, "credito_45d": 45, "credito_60d": 60}
+
+
+def resolve_client_condition(row: dict, term_key: str | None, term_plazo) -> tuple[str, object]:
+    """Condicion y plazo efectivos de un cliente.
+
+    El maestro copacol_terceros_credito manda por defecto, pero si alguien cambio
+    la condicion a mano desde el dashboard ese override gana. Sin esto la ficha
+    seguia mostrando la condicion del maestro despues de guardar.
+    """
+    manual = row.get("condicion_pago")
+    if row.get("tiene_override_condicion") and manual in CONDICIONES_VALIDAS:
+        return manual, CONDICION_PLAZO_DIAS[manual]
+    return (term_key or "sin_condicion_real"), term_plazo
+
 
 def condition_overrides_by_nit() -> dict[str, dict]:
     try:
@@ -2298,6 +2328,108 @@ def update_client_condicion(nit: str, payload: dict) -> dict:
         raise RuntimeError(
             "Condición aplicada por ahora, pero falta crear la tabla de overrides "
             "(ejecutar supabase_condition_overrides.sql en Supabase) para que persista "
+            "tras las cargas de cartera."
+        ) from exc
+    return result[0] if isinstance(result, list) and result else row
+
+
+def normalize_phone(value: object) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    if len(digits) == 12 and digits.startswith("57"):
+        digits = digits[2:]
+    return digits
+
+
+def validate_phone(value: object, field: str) -> str:
+    digits = normalize_phone(value)
+    if not digits:
+        return ""
+    if len(digits) < 7 or len(digits) > 12:
+        raise ValueError(f"{field}: use 7 digitos (fijo) o 10 (celular).")
+    if set(digits) == {"0"}:
+        raise ValueError(f"{field} invalido.")
+    return digits
+
+
+def contact_overrides_by_nit() -> dict[str, dict]:
+    try:
+        rows = fetch_all(
+            "copacol_client_contact_overrides",
+            "nit,telefono,telefono_2,direccion,activo,motivo,updated_by,source,updated_at",
+            "updated_at.desc",
+            page_size=5000,
+        )
+    except Exception:
+        return {}
+    overrides: dict[str, dict] = {}
+    for row in rows:
+        nit = normalize_nit(row.get("nit"))
+        if not nit or row.get("activo") is False:
+            continue
+        overrides[nit] = row
+    return overrides
+
+
+def apply_contact_override(row: dict, overrides: dict[str, dict]) -> dict:
+    nit = normalize_nit(row.get("nit") or row.get("cliente_nit"))
+    override = overrides.get(nit)
+    if not override:
+        return row
+    updated = {
+        **row,
+        "telefono_original": row.get("telefono"),
+        "telefono_2_original": row.get("telefono_2"),
+        "tiene_override_contacto": True,
+        "contacto_override_updated_at": override.get("updated_at"),
+    }
+    # Solo pisamos los campos que el override trae con valor: cambiar el celular
+    # no debe borrar la direccion que vino de Siigo.
+    for field in ("telefono", "telefono_2", "direccion"):
+        if override.get(field):
+            updated[field] = override.get(field)
+    return updated
+
+
+def update_client_contacto(nit: str, payload: dict) -> dict:
+    nit = normalize_nit(nit)
+    if not nit:
+        raise ValueError("NIT requerido.")
+    telefono = validate_phone(payload.get("telefono"), "Telefono principal")
+    telefono_2 = validate_phone(payload.get("telefono_2"), "Telefono alterno")
+    direccion = str(payload.get("direccion") or "").strip()
+    if not telefono and not telefono_2 and not direccion:
+        raise ValueError("Ingrese al menos un telefono o una direccion.")
+    row = {
+        "nit": nit,
+        "telefono": telefono or None,
+        "telefono_2": telefono_2 or None,
+        "direccion": direccion or None,
+        "activo": True,
+        "motivo": (payload.get("motivo") or "dashboard").strip() or "dashboard",
+        "updated_by": (payload.get("updated_by") or "dashboard").strip() or "dashboard",
+        "source": "dashboard",
+    }
+    # Efecto inmediato: el bot proactivo lee el telefono directo de copacol_clients,
+    # asi que lo actualizamos ahi tambien sin esperar la proxima carga de Siigo.
+    live_update = {key: value for key, value in row.items() if key in {"telefono", "telefono_2", "direccion"} and value}
+    if live_update:
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/copacol_clients?nit=eq.{urllib.parse.quote(nit)}"
+            body = json.dumps(live_update).encode("utf-8")
+            req = urllib.request.Request(url, data=body, method="PATCH", headers={
+                "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json", "Prefer": "return=minimal",
+            })
+            urllib.request.urlopen(req, timeout=20).read()
+        except Exception:
+            pass
+    # Persistencia (sobrevive a las cargas de Siigo). Requiere la tabla override.
+    try:
+        result = supabase_upsert("copacol_client_contact_overrides", row, "nit")
+    except Exception as exc:
+        raise RuntimeError(
+            "Contacto aplicado por ahora, pero falta crear la tabla de overrides "
+            "(ejecutar supabase_contact_overrides.sql en Supabase) para que persista "
             "tras las cargas de cartera."
         ) from exc
     return result[0] if isinstance(result, list) and result else row
@@ -2510,19 +2642,41 @@ def build_asesores_catalog() -> list[dict]:
     return build_asesores_management_payload().get("catalogo") or []
 
 
+def pick_active_client_row(rows: list[dict]) -> dict:
+    """copacol_clients guarda una fila por cliente y por corte importado.
+
+    Consultar con limit=1 sin orden dejaba que Supabase devolviera cualquiera de
+    ellas, por lo que la ficha podia abrir un corte viejo y aparentar que los
+    cambios no se guardaron. Preferimos la fila del lote activo.
+    """
+    if not rows:
+        return {}
+    active_batch_id = latest_completed_import_batch_id()
+    if active_batch_id:
+        for row in rows:
+            if row.get("import_batch_id") == active_batch_id:
+                return row
+    return rows[0]
+
+
 def build_client_payload(nit: str) -> dict:
-    params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "1"})
-    clients = supabase_get(
-        "copacol_clients",
-        f"select=*&{params}",
-    )
-    client = clients[0] if clients else {}
+    order = "fecha_corte.desc.nullslast,updated_at.desc.nullslast,created_at.desc.nullslast"
+    params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "50", "order": order}, safe=",.")
+    try:
+        clients = supabase_get("copacol_clients", f"select=*&{params}")
+    except Exception:
+        fallback = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "50"})
+        clients = supabase_get("copacol_clients", f"select=*&{fallback}")
+    client = pick_active_client_row(clients)
     overrides = advisor_overrides_by_nit()
     if client:
         client = apply_advisor_override(client, overrides)
         _cond_ov = condition_overrides_by_nit()
         if _cond_ov:
             client = apply_condition_override(client, _cond_ov)
+        _contact_ov = contact_overrides_by_nit()
+        if _contact_ov:
+            client = apply_contact_override(client, _contact_ov)
 
     inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
     invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
@@ -2537,10 +2691,12 @@ def build_client_payload(nit: str) -> dict:
         credit_term.get("plazo_pago_real"),
         credit_term.get("observacion") or (invoices[0].get("condicion_pago") if invoices else ""),
     )
+    plazo_real = credit_term.get("plazo_pago_real")
     if client:
+        condition_key, plazo_real = resolve_client_condition(client, condition_key, plazo_real)
         client = {
             **client,
-            "plazo_pago_real": credit_term.get("plazo_pago_real"),
+            "plazo_pago_real": plazo_real,
             "condicion_pago_real": condition_key,
             "condicion_credito": credit_term.get("condicion_credito"),
             "cupo_credito": credit_term.get("cupo_credito"),
@@ -2550,7 +2706,7 @@ def build_client_payload(nit: str) -> dict:
         {
             **invoice,
             "condicion_pago_real": "saldos_a_favor" if money(invoice.get("monto")) < 0 else condition_key,
-            "plazo_pago_real": credit_term.get("plazo_pago_real"),
+            "plazo_pago_real": plazo_real,
             "cupo_credito": credit_term.get("cupo_credito"),
             "observacion_credito": credit_term.get("observacion"),
         }
@@ -3720,6 +3876,18 @@ Reglas de respuesta:
             try:
                 data = json.loads(raw_body.decode("utf-8") or "{}")
                 result = update_client_condicion(nit, data)
+                json_response(self, 200, {"status": "ok", "data": result})
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
+
+        if parsed.path.startswith("/api/client/") and parsed.path.endswith("/telefono"):
+            nit = parsed.path[len("/api/client/"):-len("/telefono")]
+            try:
+                data = json.loads(raw_body.decode("utf-8") or "{}")
+                result = update_client_contacto(nit, data)
                 json_response(self, 200, {"status": "ok", "data": result})
             except ValueError as exc:
                 json_response(self, 400, {"error": str(exc)})

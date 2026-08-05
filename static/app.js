@@ -1988,6 +1988,7 @@ function openCondicionModal(nit, name, current) {
       <div class="form-group">
         <label for="condicionSelect">Nueva condición</label>
         <select id="condicionSelect">
+          ${opciones.some((o) => o.v === current) ? "" : `<option value="" selected disabled>— Seleccionar —</option>`}
           ${opciones.map((o) => `<option value="${o.v}" ${o.v === current ? "selected" : ""}>${o.label}</option>`).join("")}
         </select>
       </div>
@@ -2001,6 +2002,10 @@ function openCondicionModal(nit, name, current) {
   dlg.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", close));
   dlg.querySelector("[data-save]").addEventListener("click", async () => {
     const cond = dlg.querySelector("#condicionSelect").value;
+    if (!cond) {
+      status("Selecciona una condición.");
+      return;
+    }
     const btn = dlg.querySelector("[data-save]");
     btn.disabled = true;
     btn.textContent = "Guardando…";
@@ -2013,8 +2018,8 @@ function openCondicionModal(nit, name, current) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "No se pudo cambiar la condición");
       close();
+      await refreshAfterClientChange(nit);
       status(`Condición actualizada a ${conditionLabel(cond)}`);
-      openClientDrawer(nit);
     } catch (err) {
       status(err.message);
       btn.disabled = false;
@@ -2022,6 +2027,78 @@ function openCondicionModal(nit, name, current) {
     }
   });
   dlg.showModal();
+}
+
+function openTelefonoModal(nit, name, current, current2, currentDireccion) {
+  const user = JSON.parse(sessionStorage.getItem("copacol_user") || "{}");
+  const dlg = document.createElement("dialog");
+  dlg.className = "contact-modal";
+  dlg.innerHTML = `
+    <div class="contact-modal-head">
+      <div><p class="eyebrow">Datos de contacto</p><h2>${escapeHtml(name)}</h2></div>
+      <button class="icon-btn" data-x>×</button>
+    </div>
+    <div class="contact-modal-body">
+      <p class="muted" style="margin:0 0 8px">El cambio queda guardado y sobrevive a las cargas de Siigo. El bot proactivo usará este número.</p>
+      <div class="form-group">
+        <label for="telefonoPrincipal">Teléfono principal</label>
+        <input id="telefonoPrincipal" type="tel" inputmode="numeric" placeholder="3001234567" value="${escapeHtml(current || "")}">
+      </div>
+      <div class="form-group">
+        <label for="telefonoAlterno">Teléfono alterno (opcional)</label>
+        <input id="telefonoAlterno" type="tel" inputmode="numeric" placeholder="6021234567" value="${escapeHtml(current2 || "")}">
+      </div>
+      <div class="form-group">
+        <label for="direccionCliente">Dirección (opcional)</label>
+        <input id="direccionCliente" type="text" placeholder="CR 28F 74 23" value="${escapeHtml(currentDireccion || "")}">
+      </div>
+    </div>
+    <div class="contact-modal-actions">
+      <button class="btn-secondary" data-x>Cancelar</button>
+      <button data-save>Guardar</button>
+    </div>`;
+  document.body.appendChild(dlg);
+  const close = () => { try { dlg.close(); } catch (e) {} dlg.remove(); };
+  dlg.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", close));
+  dlg.querySelector("[data-save]").addEventListener("click", async () => {
+    const btn = dlg.querySelector("[data-save]");
+    btn.disabled = true;
+    btn.textContent = "Guardando…";
+    try {
+      const res = await fetch(`/api/client/${encodeURIComponent(nit)}/telefono`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telefono: dlg.querySelector("#telefonoPrincipal").value.trim(),
+          telefono_2: dlg.querySelector("#telefonoAlterno").value.trim(),
+          direccion: dlg.querySelector("#direccionCliente").value.trim(),
+          updated_by: user.email || "dashboard",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "No se pudo actualizar el contacto");
+      close();
+      await refreshAfterClientChange(nit);
+      status("Datos de contacto actualizados");
+    } catch (err) {
+      status(err.message);
+      btn.disabled = false;
+      btn.textContent = "Guardar";
+    }
+  });
+  dlg.showModal();
+}
+
+// Tras editar un cliente hay que refrescar la ficha Y el tablero: si solo se
+// recarga la ficha, la tarjeta de Clientes que quedo detras sigue mostrando los
+// datos viejos y parece que el cambio no se guardo.
+async function refreshAfterClientChange(nit) {
+  try {
+    await loadDashboard();
+  } catch (err) {
+    /* el tablero se refresca en el proximo ciclo */
+  }
+  if (drawerNit === nit) await openClientDrawer(nit);
 }
 
 async function openAsesorModal(nit, clientName, currentCodigo, currentNombre) {
@@ -2287,7 +2364,7 @@ async function openClientDrawer(nit) {
   $("drawerMeta").textContent = "Cargando…";
   $("drawerBody").innerHTML = '<p class="drawer-empty">Cargando…</p>';
   try {
-    const res = await fetch(`/api/client/${encodeURIComponent(nit)}`);
+    const res = await fetch(`/api/client/${encodeURIComponent(nit)}`, { cache: "no-store" });
     if (!res.ok) throw new Error("Error al cargar cliente");
     renderDrawer(await res.json());
   } catch (err) {
@@ -2321,8 +2398,9 @@ function renderDrawer(payload) {
       ${client.cupo_credito ? `<div class="drawer-info-row"><span>Cupo crédito</span><strong>${money.format(amount(client.cupo_credito))}</strong></div>` : ""}
       <div class="drawer-info-row"><span>Ciudad</span><strong>${client.ciudad || "Sin ciudad"}</strong></div>
       <div class="drawer-info-row"><span>Registro plataforma</span><strong>${formatDateTime(client.created_at)}</strong></div>
-      ${client.telefono ? `<div class="drawer-info-row"><span>Teléfono</span><strong>${client.telefono}</strong></div>` : ""}
-      ${client.direccion ? `<div class="drawer-info-row"><span>Dirección</span><strong>${client.direccion}</strong></div>` : ""}
+      <div class="drawer-info-row"><span>Teléfono${client.tiene_override_contacto ? " (editado)" : ""}</span><strong>${escapeHtml(client.telefono || "Sin teléfono")}</strong></div>
+      ${client.telefono_2 ? `<div class="drawer-info-row"><span>Teléfono alterno</span><strong>${escapeHtml(client.telefono_2)}</strong></div>` : ""}
+      ${client.direccion ? `<div class="drawer-info-row"><span>Dirección</span><strong>${escapeHtml(client.direccion)}</strong></div>` : ""}
     </div>`;
 
   const actionsHtml = `
@@ -2331,6 +2409,7 @@ function renderDrawer(payload) {
       <button class="drawer-action-btn" id="registerPromesaBtn">+ Registrar promesa</button>
       <button class="drawer-action-btn" id="changeAsesorBtn">Cambiar asesor</button>
       <button class="drawer-action-btn" id="changeCondicionBtn">Cambiar condición</button>
+      <button class="drawer-action-btn" id="changeTelefonoBtn">${client.telefono ? "Cambiar teléfono" : "Agregar teléfono"}</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
       ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
     </div>`;
@@ -2375,7 +2454,12 @@ function renderDrawer(payload) {
     openAsesorModal(client.nit, name, client.asesor_codigo || "", client.asesor_nombre || "");
   });
   $("changeCondicionBtn").addEventListener("click", () => {
-    openCondicionModal(client.nit, name, client.condicion_pago || "");
+    // Preseleccionamos lo que la ficha muestra (condicion efectiva), no el campo
+    // crudo de la carga: si no, el modal abria en una condicion distinta.
+    openCondicionModal(client.nit, name, client.condicion_pago_real || client.condicion_pago || "");
+  });
+  $("changeTelefonoBtn").addEventListener("click", () => {
+    openTelefonoModal(client.nit, name, client.telefono || "", client.telefono_2 || "", client.direccion || "");
   });
   const waBtn = $("triggerWhatsAppBtn");
   if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
