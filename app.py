@@ -267,7 +267,13 @@ def supabase_get(table: str, query: str) -> list[dict]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_all(table: str, select: str, order: str | None = None, page_size: int = 1000) -> list[dict]:
+def fetch_all(
+    table: str,
+    select: str,
+    order: str | None = None,
+    page_size: int = 1000,
+    extra_params: dict | None = None,
+) -> list[dict]:
     rows: list[dict] = []
     offset = 0
     while True:
@@ -278,12 +284,39 @@ def fetch_all(table: str, select: str, order: str | None = None, page_size: int 
         }
         if order:
             params["order"] = order
+        if extra_params:
+            params.update(extra_params)
         chunk = supabase_get(table, urllib.parse.urlencode(params, safe="*,.()"))
         rows.extend(chunk)
         if len(chunk) < page_size:
             break
         offset += page_size
     return rows
+
+
+def fetch_batch_scoped(table: str, select: str, order: str | None, batch_id: str | None) -> list[dict]:
+    """Trae solo las filas del lote activo, mas las manuales que no tienen lote.
+
+    Antes se traia la tabla entera y se filtraba en memoria. Con un solo corte
+    guardado da igual, pero la ingesta va a empezar a conservar historia: ahi
+    serian decenas de miles de filas en cada carga del tablero.
+    """
+    if not batch_id:
+        return fetch_all(table, select, order)
+    try:
+        scoped = fetch_all(
+            table,
+            select,
+            order,
+            extra_params={"or": f"(import_batch_id.eq.{batch_id},import_batch_id.is.null)"},
+        )
+    except Exception:
+        return fetch_all(table, select, order)
+    if not any(row.get("import_batch_id") == batch_id for row in scoped):
+        # El lote activo no aporto filas: volvemos al barrido completo para no
+        # romper los caminos de respaldo que se apoyan en fecha_corte.
+        return fetch_all(table, select, order)
+    return scoped
 
 
 def money(value) -> float:
@@ -1242,11 +1275,13 @@ def build_dashboard_payload() -> dict:
     except Exception:
         import_batches = []
     latest_batch = import_batches[0] if import_batches else {}
+    scope_batch_id = latest_batch.get("id")
 
-    clients = fetch_all(
+    clients = fetch_batch_scoped(
         "copacol_clients",
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
+        scope_batch_id,
     )
     # Mapa completo NIT -> nombre (todos los clientes, antes de cualquier filtro/scope).
     # Evita que el Pareto muestre "Sin cliente" cuando el nombre existe pero el cliente
@@ -1258,23 +1293,26 @@ def build_dashboard_payload() -> dict:
     }
     invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,asesor_codigo,asesor_nombre,import_batch_id,created_at,updated_at"
     try:
-        invoices = fetch_all(
+        invoices = fetch_batch_scoped(
             "copacol_facturas",
             invoice_select,
             "fecha_vencimiento.asc",
+            scope_batch_id,
         )
     except Exception:
         try:
-            invoices = fetch_all(
+            invoices = fetch_batch_scoped(
                 "copacol_facturas",
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
+                scope_batch_id,
             )
         except Exception:
-            invoices = fetch_all(
+            invoices = fetch_batch_scoped(
                 "copacol_facturas",
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
+                scope_batch_id,
             )
     promises = fetch_all(
         "copacol_promesas_pago",
