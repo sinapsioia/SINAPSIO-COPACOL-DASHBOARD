@@ -2741,8 +2741,19 @@ def build_client_payload(nit: str) -> dict:
         if _contact_ov:
             client = apply_contact_override(client, _contact_ov)
 
-    inv_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
-    invoices = supabase_get("copacol_facturas", f"select=*&{inv_params}")
+    # Las facturas se acotan al mismo lote que la fila de cliente que quedo
+    # seleccionada. Sin esto la ficha mezcla los cortes: un cliente con 10
+    # facturas en julio y 12 en agosto aparecia con 22, y build_whatsapp_payload
+    # le mandaba al cliente ese saldo inflado.
+    invoice_batch_id = client.get("import_batch_id") if client else None
+    inv_query = {"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"}
+    if invoice_batch_id:
+        inv_query["or"] = f"(import_batch_id.eq.{invoice_batch_id},import_batch_id.is.null)"
+    invoices = supabase_get("copacol_facturas", f"select=*&{urllib.parse.urlencode(inv_query, safe=',.()')}")
+    if invoice_batch_id and not invoices:
+        # El lote no aporto facturas: caemos al comportamiento previo.
+        fallback_query = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "200", "order": "fecha_vencimiento.asc"})
+        invoices = supabase_get("copacol_facturas", f"select=*&{fallback_query}")
     credit_term = {}
     try:
         term_params = urllib.parse.urlencode({"nit": f"eq.{normalize_nit(nit)}", "limit": "1"})
