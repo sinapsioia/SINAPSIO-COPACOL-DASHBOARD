@@ -27,6 +27,8 @@ let clientNoGestionMode = false;
 let asesoresGestion = { summary: {}, asesores: [], catalogo: [], clientes: [] };
 let advisorManageSearch = "";
 let advisorManageSelected = new Set();
+// Corte que se esta consultando. Vacio = el vigente, que es la operacion del dia.
+let corteSeleccionado = "";
 
 const agingLabels = {
   vigente: ["Vigente", "var(--green)"],
@@ -526,7 +528,10 @@ function buildView() {
 
 async function loadDashboard() {
   status("Actualizando...");
-  const response = await fetch("/api/dashboard", { cache: "no-store" });
+  const url = corteSeleccionado
+    ? `/api/dashboard?corte=${encodeURIComponent(corteSeleccionado)}`
+    : "/api/dashboard";
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error || "No se pudo cargar la base de datos");
@@ -536,6 +541,54 @@ async function loadDashboard() {
   renderDashboard();
   status(`Datos actualizados ${new Date().toLocaleTimeString("es-CO")}`);
   if (currentPage === "historial") loadImportHistory();
+}
+
+// El tablero puede consultarse a una fecha de corte pasada. Cuando eso pasa hay
+// que dejarlo MUY visible: los saldos en pantalla ya no son los de hoy, y quien
+// llame a un cliente con esas cifras le va a cobrar algo que quiza ya pagó.
+function renderCorteSelector(summary) {
+  const select = $("corteSelect");
+  const banner = $("corteBanner");
+  if (!select) return;
+  const cortes = summary.cortes_disponibles || [];
+  const historico = Boolean(summary.es_corte_historico);
+
+  const opciones = cortes
+    .map((c) => {
+      const vigente = c.fecha_corte === summary.corte_vigente;
+      const etiqueta = `${c.fecha_corte}${vigente ? " · vigente" : ""} — ${number.format(c.facturas)} docs`;
+      const value = vigente ? "" : c.fecha_corte;
+      const sel = (corteSeleccionado || "") === value ? "selected" : "";
+      return `<option value="${escapeHtml(value)}" ${sel}>${escapeHtml(etiqueta)}</option>`;
+    })
+    .join("");
+  select.innerHTML = opciones || `<option value="">Sin cortes disponibles</option>`;
+  select.parentElement.classList.toggle("historico", historico);
+
+  if (banner) {
+    if (historico) {
+      banner.style.display = "";
+      banner.innerHTML =
+        `Estás viendo la cartera al <strong>${escapeHtml(summary.fecha_corte || "-")}</strong>. ` +
+        `No son los saldos de hoy (corte vigente: ${escapeHtml(summary.corte_vigente || "-")}).` +
+        `<button id="volverCorteVigente">Volver al vigente</button>`;
+      const btn = $("volverCorteVigente");
+      if (btn) btn.addEventListener("click", () => cambiarCorte(""));
+    } else {
+      banner.style.display = "none";
+      banner.innerHTML = "";
+    }
+  }
+}
+
+async function cambiarCorte(valor) {
+  corteSeleccionado = valor || "";
+  if (drawerNit) closeClientDrawer();
+  try {
+    await loadDashboard();
+  } catch (err) {
+    status(err.message);
+  }
 }
 
 async function loadImportHistory() {
@@ -582,6 +635,7 @@ function renderDashboard() {
   const saldosFavor = amount(copacol.saldos_a_favor) || Math.abs(conditionValueFromMix(copacol.condition_mix, "saldos_a_favor"));
 
   setText("cutDate", summary.fecha_corte || "Sin fecha de corte");
+  renderCorteSelector(summary);
   setText("lastUpdate", `Última actualización: ${formatDateTime(summary.ultima_actualizacion)}`);
   setText("heroTitle", `${number.format(summary.facturas)} documentos · ${number.format(summary.clientes)} clientes`);
   setText("kpiTotal", moneyFull(summary.total_saldo));
@@ -2364,7 +2418,10 @@ async function openClientDrawer(nit) {
   $("drawerMeta").textContent = "Cargando…";
   $("drawerBody").innerHTML = '<p class="drawer-empty">Cargando…</p>';
   try {
-    const res = await fetch(`/api/client/${encodeURIComponent(nit)}`, { cache: "no-store" });
+    const url = corteSeleccionado
+      ? `/api/client/${encodeURIComponent(nit)}?corte=${encodeURIComponent(corteSeleccionado)}`
+      : `/api/client/${encodeURIComponent(nit)}`;
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error("Error al cargar cliente");
     renderDrawer(await res.json());
   } catch (err) {
@@ -2411,8 +2468,11 @@ function renderDrawer(payload) {
       <button class="drawer-action-btn" id="changeCondicionBtn">Cambiar condición</button>
       <button class="drawer-action-btn" id="changeTelefonoBtn">${client.telefono ? "Cambiar teléfono" : "Agregar teléfono"}</button>
       ${phone ? `<a href="tel:+${phone}" class="drawer-action-btn">Llamar</a>` : ""}
-      ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}">Preparar WhatsApp</button>` : ""}
-    </div>`;
+      ${phone ? `<button class="drawer-action-btn" id="triggerWhatsAppBtn" data-nit="${client.nit}"
+          ${corteSeleccionado ? `disabled title="No disponible al consultar un corte pasado: los saldos no son los de hoy"` : ""}
+        >Preparar WhatsApp</button>` : ""}
+    </div>
+    ${corteSeleccionado ? `<p class="drawer-empty">Ficha al corte ${escapeHtml(corteSeleccionado)}. El envío de WhatsApp está desactivado para no cobrarle al cliente saldos que ya no son los actuales.</p>` : ""}`;
 
   const overdueInvs = invoices.filter((inv) => Number(inv.dias_mora || 0) > 0).slice(0, 15);
   const invoicesHtml = overdueInvs.length
@@ -2462,7 +2522,7 @@ function renderDrawer(payload) {
     openTelefonoModal(client.nit, name, client.telefono || "", client.telefono_2 || "", client.direccion || "");
   });
   const waBtn = $("triggerWhatsAppBtn");
-  if (waBtn) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
+  if (waBtn && !waBtn.disabled) waBtn.addEventListener("click", () => triggerWhatsAppFlow(client.nit, waBtn));
 }
 
 function closeClientDrawer() {
@@ -2611,6 +2671,8 @@ async function downloadVisibleInvoices() {
     minAmount: String(filters.minAmount || 0),
     mode: tableMode,
   });
+  // El Excel se genera contra el mismo corte que se esta viendo en pantalla.
+  if (corteSeleccionado) params.set("corte", corteSeleccionado);
   try {
     button.disabled = true;
     button.textContent = "Generando Excel…";
@@ -2675,6 +2737,7 @@ async function confirmImport() {
 
 $("refreshBtn").addEventListener("click", () => loadDashboard().catch((error) => status(error.message)));
 $("globalSearch").addEventListener("input", rerenderFilteredViews);
+$("corteSelect")?.addEventListener("change", (event) => cambiarCorte(event.target.value));
 $("sellerFilter").addEventListener("change", rerenderFilteredViews);
 $("accountFilter").addEventListener("change", rerenderFilteredViews);
 $("agingFilter").addEventListener("change", rerenderFilteredViews);

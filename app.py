@@ -561,6 +561,7 @@ def export_filters_from_query(query: str) -> dict:
         "aging": (params.get("aging", ["all"])[0] or "all").strip(),
         "mode": (params.get("mode", ["all"])[0] or "all").strip().lower(),
         "minAmount": min_amount,
+        "corte": (params.get("corte", [""])[0] or "").strip(),
     }
 
 
@@ -631,8 +632,8 @@ def build_advisor_export_workbook(query: str) -> tuple[bytes, str, dict]:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    payload = build_dashboard_payload()
     filters = export_filters_from_query(query)
+    payload = build_dashboard_payload(filters.get("corte") or None)
     all_invoices = payload.get("invoices") or []
     has_siigo_accounts = any(invoice_account(row) for row in all_invoices)
     invoices = [
@@ -1268,7 +1269,38 @@ def build_gestion_cobertura(overdue_clients: list[dict], log_contactos: list[dic
     }
 
 
-def build_dashboard_payload() -> dict:
+def resolve_corte(import_batches: list[dict], fecha_corte: str | None) -> tuple[dict, list[dict]]:
+    """Elige el lote a mostrar y arma el catalogo de cortes disponibles.
+
+    Por defecto manda el ultimo importado, que es la operacion del dia. Si se
+    pide una fecha concreta se usa el lote mas reciente de esa fecha, para poder
+    consultar un cierre pasado sin alterar lo que ven el bot ni las cargas.
+
+    Un mismo dia puede tener varias cargas; nos quedamos con la ultima, que es
+    la que corrigio a las anteriores.
+    """
+    catalogo: dict[str, dict] = {}
+    for batch in import_batches:  # ya vienen ordenados por imported_at desc
+        corte = str(batch.get("fecha_corte") or "")
+        if corte and corte not in catalogo:
+            catalogo[corte] = batch
+    cortes = [
+        {
+            "fecha_corte": corte,
+            "import_batch_id": batch.get("id"),
+            "imported_at": batch.get("imported_at"),
+            "facturas": int(money(batch.get("facturas"))),
+            "clientes": int(money(batch.get("clientes"))),
+            "total_vencido": money(batch.get("total_vencido")),
+        }
+        for corte, batch in sorted(catalogo.items(), reverse=True)
+    ]
+    vigente = import_batches[0] if import_batches else {}
+    seleccionado = catalogo.get(str(fecha_corte or "")) or vigente
+    return seleccionado, cortes
+
+
+def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
     import_batches = []
     try:
         import_batches = fetch_all(
@@ -1280,7 +1312,9 @@ def build_dashboard_payload() -> dict:
         import_batches = [batch for batch in import_batches if (batch.get("status") or "").lower() == "completed"]
     except Exception:
         import_batches = []
-    latest_batch = import_batches[0] if import_batches else {}
+    latest_batch, cortes_disponibles = resolve_corte(import_batches, fecha_corte)
+    corte_vigente = str((import_batches[0] if import_batches else {}).get("fecha_corte") or "")
+    es_corte_historico = bool(import_batches) and latest_batch.get("id") != import_batches[0].get("id")
     scope_batch_id = latest_batch.get("id")
 
     clients, clients_scope = fetch_batch_scoped(
@@ -1354,12 +1388,15 @@ def build_dashboard_payload() -> dict:
     latest_clients = [c for c in clients if c.get("fecha_corte") == latest_cut] if latest_cut else []
     batch_clients = [c for c in clients if c.get("import_batch_id") == active_batch_id] if active_batch_id else []
     batch_invoices = [i for i in invoices if i.get("import_batch_id") == active_batch_id] if active_batch_id else []
-    manual_clients = [
+    # Las filas cargadas a mano despues de la importacion solo tienen sentido
+    # sobre el corte vigente: al consultar un cierre pasado contaminarian la foto
+    # con movimientos posteriores a esa fecha.
+    manual_clients = [] if es_corte_historico else [
         c for c in clients
         if not c.get("import_batch_id")
         and ((row_stamp(c) and row_stamp(c) > latest_imported_at) or str(c.get("fecha_corte") or "") > latest_cut)
     ]
-    manual_invoices = [
+    manual_invoices = [] if es_corte_historico else [
         i for i in invoices
         if not i.get("import_batch_id")
         and ((row_stamp(i) and row_stamp(i) > latest_imported_at) or str(i.get("fecha_corte") or "") > latest_cut)
@@ -1925,6 +1962,9 @@ def build_dashboard_payload() -> dict:
             "snapshot_activo": using_active_batch or using_active_cut,
             "import_batch_id": active_batch_id,
             "scope_consulta": {"clientes": clients_scope, "facturas": invoices_scope},
+            "corte_vigente": corte_vigente,
+            "es_corte_historico": es_corte_historico,
+            "cortes_disponibles": cortes_disponibles,
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
             "terceros_credito": len(credit_terms),
             "cuentas_siigo": {
@@ -2705,7 +2745,26 @@ def build_asesores_catalog() -> list[dict]:
     return build_asesores_management_payload().get("catalogo") or []
 
 
-def pick_active_client_row(rows: list[dict]) -> dict:
+def batch_id_for_corte(fecha_corte: str | None) -> str:
+    """Lote mas reciente de una fecha de corte. Vacio si no se pide fecha."""
+    if not fecha_corte:
+        return ""
+    try:
+        batches = fetch_all(
+            "copacol_import_batches",
+            "id,fecha_corte,status,imported_at",
+            "imported_at.desc",
+            page_size=200,
+        )
+    except Exception:
+        return ""
+    for batch in batches:
+        if (batch.get("status") or "").lower() == "completed" and str(batch.get("fecha_corte") or "") == str(fecha_corte):
+            return str(batch.get("id") or "")
+    return ""
+
+
+def pick_active_client_row(rows: list[dict], batch_id: str | None = None) -> dict:
     """copacol_clients guarda una fila por cliente y por corte importado.
 
     Consultar con limit=1 sin orden dejaba que Supabase devolviera cualquiera de
@@ -2714,15 +2773,15 @@ def pick_active_client_row(rows: list[dict]) -> dict:
     """
     if not rows:
         return {}
-    active_batch_id = latest_completed_import_batch_id()
-    if active_batch_id:
+    target = batch_id or latest_completed_import_batch_id()
+    if target:
         for row in rows:
-            if row.get("import_batch_id") == active_batch_id:
+            if row.get("import_batch_id") == target:
                 return row
     return rows[0]
 
 
-def build_client_payload(nit: str) -> dict:
+def build_client_payload(nit: str, fecha_corte: str | None = None) -> dict:
     order = "fecha_corte.desc.nullslast,updated_at.desc.nullslast,created_at.desc.nullslast"
     params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "50", "order": order}, safe=",.")
     try:
@@ -2730,7 +2789,7 @@ def build_client_payload(nit: str) -> dict:
     except Exception:
         fallback = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "50"})
         clients = supabase_get("copacol_clients", f"select=*&{fallback}")
-    client = pick_active_client_row(clients)
+    client = pick_active_client_row(clients, batch_id_for_corte(fecha_corte))
     overrides = advisor_overrides_by_nit()
     if client:
         client = apply_advisor_override(client, overrides)
@@ -3564,7 +3623,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/dashboard":
             try:
-                json_response(self, 200, build_dashboard_payload())
+                corte = (urllib.parse.parse_qs(parsed.query).get("corte", [""])[0] or "").strip()
+                json_response(self, 200, build_dashboard_payload(corte or None))
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc)})
             return
@@ -3640,7 +3700,8 @@ class Handler(BaseHTTPRequestHandler):
             nit = parsed.path[len("/api/client/"):]
             if "/" not in nit:
                 try:
-                    json_response(self, 200, build_client_payload(nit))
+                    corte = (urllib.parse.parse_qs(parsed.query).get("corte", [""])[0] or "").strip()
+                    json_response(self, 200, build_client_payload(nit, corte or None))
                 except Exception as exc:
                     json_response(self, 500, {"error": str(exc)})
                 return

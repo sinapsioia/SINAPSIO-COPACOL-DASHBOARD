@@ -151,6 +151,10 @@
               <h2>Cartera COPACOL</h2>
               <span id="cutDate" class="muted">-</span>
             </div>
+            <div class="corte-control">
+              <label for="corteSelect">Fecha de corte</label>
+              <select id="corteSelect"><option value="">Corte vigente</option></select>
+            </div>
             <div id="riskPill" class="risk-pill">Calculando riesgo</div>
           </div>
 
@@ -970,6 +974,7 @@
       </div>
     </aside>
 
-    <script src="/app.js?v=telefono-condicion-20260805"></script>
+    <div id="corteBanner" class="corte-banner" style="display:none"></div>
+    <script src="/app.js?v=selector-corte-20260806"></script>
   </body>
 </html>
