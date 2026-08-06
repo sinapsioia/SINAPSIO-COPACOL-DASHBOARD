@@ -294,15 +294,21 @@ def fetch_all(
     return rows
 
 
-def fetch_batch_scoped(table: str, select: str, order: str | None, batch_id: str | None) -> list[dict]:
+def fetch_batch_scoped(
+    table: str, select: str, order: str | None, batch_id: str | None
+) -> tuple[list[dict], str]:
     """Trae solo las filas del lote activo, mas las manuales que no tienen lote.
 
     Antes se traia la tabla entera y se filtraba en memoria. Con un solo corte
     guardado da igual, pero la ingesta va a empezar a conservar historia: ahi
     serian decenas de miles de filas en cada carga del tablero.
+
+    Devuelve tambien por que camino leyo, que se expone en el resumen para poder
+    ver de un vistazo si el filtrado por lote esta funcionando o si se cayo al
+    barrido completo.
     """
     if not batch_id:
-        return fetch_all(table, select, order)
+        return fetch_all(table, select, order), "completo_sin_lote"
     try:
         scoped = fetch_all(
             table,
@@ -311,12 +317,12 @@ def fetch_batch_scoped(table: str, select: str, order: str | None, batch_id: str
             extra_params={"or": f"(import_batch_id.eq.{batch_id},import_batch_id.is.null)"},
         )
     except Exception:
-        return fetch_all(table, select, order)
+        return fetch_all(table, select, order), "completo_error_filtro"
     if not any(row.get("import_batch_id") == batch_id for row in scoped):
         # El lote activo no aporto filas: volvemos al barrido completo para no
         # romper los caminos de respaldo que se apoyan en fecha_corte.
-        return fetch_all(table, select, order)
-    return scoped
+        return fetch_all(table, select, order), "completo_lote_vacio"
+    return scoped, "lote"
 
 
 def money(value) -> float:
@@ -1277,7 +1283,7 @@ def build_dashboard_payload() -> dict:
     latest_batch = import_batches[0] if import_batches else {}
     scope_batch_id = latest_batch.get("id")
 
-    clients = fetch_batch_scoped(
+    clients, clients_scope = fetch_batch_scoped(
         "copacol_clients",
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
@@ -1293,7 +1299,7 @@ def build_dashboard_payload() -> dict:
     }
     invoice_select = "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,asesor_codigo,asesor_nombre,import_batch_id,created_at,updated_at"
     try:
-        invoices = fetch_batch_scoped(
+        invoices, invoices_scope = fetch_batch_scoped(
             "copacol_facturas",
             invoice_select,
             "fecha_vencimiento.asc",
@@ -1301,14 +1307,14 @@ def build_dashboard_payload() -> dict:
         )
     except Exception:
         try:
-            invoices = fetch_batch_scoped(
+            invoices, invoices_scope = fetch_batch_scoped(
                 "copacol_facturas",
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
                 scope_batch_id,
             )
         except Exception:
-            invoices = fetch_batch_scoped(
+            invoices, invoices_scope = fetch_batch_scoped(
                 "copacol_facturas",
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
@@ -1918,6 +1924,7 @@ def build_dashboard_payload() -> dict:
             "ultima_actualizacion": ultima_actualizacion,
             "snapshot_activo": using_active_batch or using_active_cut,
             "import_batch_id": active_batch_id,
+            "scope_consulta": {"clientes": clients_scope, "facturas": invoices_scope},
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
             "terceros_credito": len(credit_terms),
             "cuentas_siigo": {
