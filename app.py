@@ -2356,16 +2356,7 @@ def update_client_condicion(nit: str, payload: dict) -> dict:
     }
     # Efecto inmediato: aplicar la condicion tambien en copacol_clients para que el
     # bot (que lee condicion_pago directo) la tome sin esperar la proxima carga.
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/copacol_clients?nit=eq.{urllib.parse.quote(nit)}"
-        body = json.dumps({"condicion_pago": cond}).encode("utf-8")
-        req = urllib.request.Request(url, data=body, method="PATCH", headers={
-            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json", "Prefer": "return=minimal",
-        })
-        urllib.request.urlopen(req, timeout=20).read()
-    except Exception:
-        pass
+    patch_live_client_row(nit, {"condicion_pago": cond})
     # Persistencia (sobrevive a las cargas de Siigo). Requiere la tabla override.
     try:
         result = supabase_upsert("copacol_client_condition_overrides", row, "nit")
@@ -2376,6 +2367,41 @@ def update_client_condicion(nit: str, payload: dict) -> dict:
             "tras las cargas de cartera."
         ) from exc
     return result[0] if isinstance(result, list) and result else row
+
+
+def patch_live_client_row(nit: str, update_row: dict) -> None:
+    """Replica un cambio manual en copacol_clients, acotado al lote activo.
+
+    Estas columnas se duplican aqui porque el bot las lee directo de la tabla y
+    no puede esperar a la proxima carga. Sin acotar por lote, en cuanto la
+    ingesta conserve historia el cambio reescribiria tambien los cortes pasados
+    y dejarian de ser una foto fiel del cierre.
+
+    Es best-effort: la fuente de verdad es la tabla de overrides, asi que un
+    fallo aqui no debe tumbar la operacion.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY or not update_row:
+        return
+    quoted_nit = urllib.parse.quote(nit)
+    active_batch_id = latest_completed_import_batch_id()
+    if active_batch_id:
+        scope = (
+            f"nit=eq.{quoted_nit}"
+            f"&or=(import_batch_id.eq.{urllib.parse.quote(active_batch_id)},import_batch_id.is.null)"
+        )
+    else:
+        scope = f"nit=eq.{quoted_nit}"
+    try:
+        if supabase_patch("copacol_clients", scope, update_row):
+            return
+    except Exception:
+        pass
+    if active_batch_id:
+        # El lote activo no tenia fila para ese NIT: caemos al comportamiento previo.
+        try:
+            supabase_patch("copacol_clients", f"nit=eq.{quoted_nit}", update_row)
+        except Exception:
+            pass
 
 
 def normalize_phone(value: object) -> str:
@@ -2456,18 +2482,10 @@ def update_client_contacto(nit: str, payload: dict) -> dict:
     }
     # Efecto inmediato: el bot proactivo lee el telefono directo de copacol_clients,
     # asi que lo actualizamos ahi tambien sin esperar la proxima carga de Siigo.
-    live_update = {key: value for key, value in row.items() if key in {"telefono", "telefono_2", "direccion"} and value}
-    if live_update:
-        try:
-            url = f"{SUPABASE_URL}/rest/v1/copacol_clients?nit=eq.{urllib.parse.quote(nit)}"
-            body = json.dumps(live_update).encode("utf-8")
-            req = urllib.request.Request(url, data=body, method="PATCH", headers={
-                "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json", "Prefer": "return=minimal",
-            })
-            urllib.request.urlopen(req, timeout=20).read()
-        except Exception:
-            pass
+    patch_live_client_row(
+        nit,
+        {key: value for key, value in row.items() if key in {"telefono", "telefono_2", "direccion"} and value},
+    )
     # Persistencia (sobrevive a las cargas de Siigo). Requiere la tabla override.
     try:
         result = supabase_upsert("copacol_client_contact_overrides", row, "nit")
