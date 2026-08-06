@@ -566,6 +566,22 @@ function renderCorteSelector(summary) {
   select.parentElement.classList.toggle("historico", historico);
 
   if (banner) {
+    if (summary.corte_sin_detalle) {
+      // Cortes anteriores a la retencion: existe el registro del lote pero sus
+      // filas se borraron. Mostramos los totales que quedaron guardados y
+      // decimos claramente que el detalle no existe, en vez de dejar ceros.
+      const t = summary.corte_totales_registrados || {};
+      banner.style.display = "";
+      banner.innerHTML =
+        `El corte <strong>${escapeHtml(summary.fecha_corte || "-")}</strong> no tiene detalle guardado ` +
+        `(es anterior a que el sistema empezara a archivar cada carga). ` +
+        `De ese día solo quedan los totales: <strong>${moneyFull(t.total_vencido)}</strong> vencido ` +
+        `sobre ${number.format(t.facturas || 0)} documentos y ${number.format(t.clientes || 0)} clientes.` +
+        `<button id="volverCorteVigente">Volver al vigente</button>`;
+      const btn0 = $("volverCorteVigente");
+      if (btn0) btn0.addEventListener("click", () => cambiarCorte(""));
+      return;
+    }
     if (historico) {
       banner.style.display = "";
       banner.innerHTML =

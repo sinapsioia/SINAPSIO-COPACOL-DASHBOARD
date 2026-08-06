@@ -295,7 +295,7 @@ def fetch_all(
 
 
 def fetch_batch_scoped(
-    table: str, select: str, order: str | None, batch_id: str | None
+    table: str, select: str, order: str | None, batch_id: str | None, strict: bool = False
 ) -> tuple[list[dict], str]:
     """Trae solo las filas del lote activo, mas las manuales que no tienen lote.
 
@@ -319,7 +319,13 @@ def fetch_batch_scoped(
     except Exception:
         return fetch_all(table, select, order), "completo_error_filtro"
     if not any(row.get("import_batch_id") == batch_id for row in scoped):
-        # El lote activo no aporto filas: volvemos al barrido completo para no
+        if strict:
+            # Se pidio un corte concreto y ese lote no conserva detalle (es
+            # anterior a la retencion). Devolver el barrido completo mezclaria
+            # todos los cortes guardados bajo una fecha que no les corresponde,
+            # asi que preferimos no devolver nada y avisarlo.
+            return [], "sin_detalle"
+        # El lote vigente no aporto filas: volvemos al barrido completo para no
         # romper los caminos de respaldo que se apoyan en fecha_corte.
         return fetch_all(table, select, order), "completo_lote_vacio"
     return scoped, "lote"
@@ -1316,12 +1322,17 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
     corte_vigente = str((import_batches[0] if import_batches else {}).get("fecha_corte") or "")
     es_corte_historico = bool(import_batches) and latest_batch.get("id") != import_batches[0].get("id")
     scope_batch_id = latest_batch.get("id")
+    # Al pedir un corte concreto no se acepta el barrido completo como respaldo:
+    # los cortes anteriores a la retencion no conservan detalle, y devolver la
+    # tabla entera mostraria la suma de todos los cortes bajo esa fecha.
+    corte_estricto = bool(fecha_corte) and es_corte_historico
 
     clients, clients_scope = fetch_batch_scoped(
         "copacol_clients",
         "id,nit,razon_social,telefono,telefono_2,direccion,ciudad,asesor_codigo,asesor_nombre,total_saldo,total_vencido,total_vigente,num_facturas,num_vencidas,dias_mora_max,etapa_cobranza,escalado,promesa_fecha,ultimo_contacto,fecha_corte,import_batch_id,created_at,updated_at",
         "total_saldo.desc",
         scope_batch_id,
+        corte_estricto,
     )
     # Mapa completo NIT -> nombre (todos los clientes, antes de cualquier filtro/scope).
     # Evita que el Pareto muestre "Sin cliente" cuando el nombre existe pero el cliente
@@ -1338,6 +1349,7 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
             invoice_select,
             "fecha_vencimiento.asc",
             scope_batch_id,
+            corte_estricto,
         )
     except Exception:
         try:
@@ -1346,6 +1358,7 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,cuenta_siigo,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
                 scope_batch_id,
+                corte_estricto,
             )
         except Exception:
             invoices, invoices_scope = fetch_batch_scoped(
@@ -1353,6 +1366,7 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
                 "id,nit,numero_factura,tipo_mov,monto,vlr_mora,fecha_emision,fecha_vencimiento,dias_mora,condicion_pago,estado,import_batch_id,created_at,updated_at",
                 "fecha_vencimiento.asc",
                 scope_batch_id,
+                corte_estricto,
             )
     promises = fetch_all(
         "copacol_promesas_pago",
@@ -1965,6 +1979,18 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
             "corte_vigente": corte_vigente,
             "es_corte_historico": es_corte_historico,
             "cortes_disponibles": cortes_disponibles,
+            "corte_sin_detalle": invoices_scope == "sin_detalle",
+            # Totales que el lote guardo al importarse. Es lo unico que queda de
+            # los cortes anteriores a la retencion, y sirve para no dejar la
+            # pantalla en ceros sin explicacion.
+            "corte_totales_registrados": {
+                "saldo_total": money(latest_batch.get("saldo_total")),
+                "total_vencido": money(latest_batch.get("total_vencido")),
+                "total_vigente": money(latest_batch.get("total_vigente")),
+                "facturas": int(money(latest_batch.get("facturas"))),
+                "clientes": int(money(latest_batch.get("clientes"))),
+                "aging": latest_batch.get("aging") or {},
+            },
             "filas_manual_recientes": len(manual_clients) + len(manual_invoices),
             "terceros_credito": len(credit_terms),
             "cuentas_siigo": {
