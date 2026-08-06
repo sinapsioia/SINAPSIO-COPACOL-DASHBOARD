@@ -2046,6 +2046,53 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
     }
 
 
+def recalcular_preview(token: str, fecha_corte: str) -> dict:
+    """Recalcula la vista previa contra otra fecha de corte.
+
+    El aging y el control de cambios se calculan una sola vez, contra la fecha
+    detectada en el encabezado del archivo. Si el usuario corrige la fecha, esas
+    cifras quedaban mintiendo: en la carga del 31 de julio el panel mostro el
+    vencido creciendo +$25,17M cuando en realidad caia -$42,46M. Signo invertido
+    en la pantalla que existe justamente para decidir si confirmar.
+
+    No hace falta releer el XLSX: los registros ya estan en IMPORT_CACHE con su
+    fecha de vencimiento y su saldo.
+    """
+    entry = IMPORT_CACHE.get(token)
+    if not entry:
+        raise ValueError("Token de importación inválido o expirado.")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha_corte or ""):
+        raise ValueError("La fecha de corte debe tener el formato AAAA-MM-DD.")
+    try:
+        datetime.fromisoformat(fecha_corte)
+    except ValueError:
+        raise ValueError("La fecha de corte no es una fecha válida.") from None
+
+    aging = empty_aging()
+    total_saldo = 0.0
+    facturas_vencidas = 0
+    for record in entry.get("records") or []:
+        saldo = money(record.get("saldo"))
+        dias = days_between(record.get("fecha_vencimiento"), fecha_corte)
+        if dias is None:
+            dias = money(record.get("dias_mora"))
+        aging[aging_bucket(dias)] += saldo
+        total_saldo += saldo
+        if dias > 0:
+            facturas_vencidas += 1
+
+    preview = {
+        **(entry.get("preview_base") or {}),
+        "token": token,
+        "fecha_corte_detectada": fecha_corte,
+        "aging": aging,
+        "facturas_vencidas": facturas_vencidas,
+        "recalculado": True,
+    }
+    preview["control_cambios"] = snapshot_control_from_preview(preview)
+    return preview
+
+
 def snapshot_control_from_preview(preview: dict) -> dict:
     incoming = {
         "fecha_corte": preview.get("fecha_corte_detectada"),
@@ -2058,16 +2105,25 @@ def snapshot_control_from_preview(preview: dict) -> dict:
         ),
         "total_vigente": money((preview.get("aging") or {}).get("vigente")) + money((preview.get("aging") or {}).get("por_vencer_8")),
     }
+    # Antes se armaba el tablero completo solo para leer su resumen: ~7 segundos
+    # que crecen con cada corte acumulado, y ahora esto se llama en cada cambio
+    # de fecha. El lote ya guarda sus propios totales.
     try:
-        summary = build_dashboard_payload()["summary"]
+        batches = fetch_all(
+            "copacol_import_batches",
+            "id,fecha_corte,imported_at,status,clientes,facturas,saldo_total,total_vencido,total_vigente",
+            "imported_at.desc",
+            page_size=20,
+        )
+        activo = next((b for b in batches if (b.get("status") or "").lower() == "completed"), {})
         current = {
-            "fecha_corte": summary.get("fecha_corte"),
-            "ultima_actualizacion": summary.get("ultima_actualizacion"),
-            "facturas": summary.get("facturas") or 0,
-            "clientes": summary.get("clientes") or 0,
-            "saldo_total": money(summary.get("total_saldo")),
-            "total_vencido": money(summary.get("total_vencido")),
-            "total_vigente": money(summary.get("total_vigente")),
+            "fecha_corte": activo.get("fecha_corte"),
+            "ultima_actualizacion": activo.get("imported_at"),
+            "facturas": int(money(activo.get("facturas"))),
+            "clientes": int(money(activo.get("clientes"))),
+            "saldo_total": money(activo.get("saldo_total")),
+            "total_vencido": money(activo.get("total_vencido")),
+            "total_vigente": money(activo.get("total_vigente")),
         }
     except Exception:
         current = {}
@@ -3448,6 +3504,8 @@ def parse_xlsx(path: Path) -> dict:
             "message": "Validación lista. Confirma para actualizar la base de datos.",
         }
         preview["control_cambios"] = snapshot_control_from_preview(preview)
+        # Base para recalcular si el usuario corrige la fecha de corte.
+        IMPORT_CACHE[import_token]["preview_base"] = preview
         return preview
 
     with zipfile.ZipFile(path) as archive:
@@ -3671,6 +3729,8 @@ def parse_xlsx(path: Path) -> dict:
         "message": "Validación lista. Confirma para actualizar la base de datos.",
     }
     preview["control_cambios"] = snapshot_control_from_preview(preview)
+    # Base para recalcular si el usuario corrige la fecha de corte.
+    IMPORT_CACHE[import_token]["preview_base"] = preview
     return preview
 
 
@@ -3815,6 +3875,17 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if self.handle_client_mutation(parsed, self.rfile.read(length) if length else b""):
                 return
+
+        if parsed.path == "/api/import/preview/recalc":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                json_response(self, 200, recalcular_preview(data.get("token", ""), data.get("fecha_corte", "")))
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc)})
+            return
 
         if parsed.path == "/api/import/confirm":
             length = int(self.headers.get("Content-Length", "0"))

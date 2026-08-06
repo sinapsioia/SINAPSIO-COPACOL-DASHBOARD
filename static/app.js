@@ -1674,8 +1674,8 @@ function renderImportPreview(result) {
       <input type="date" id="importFechaCorte" value="${escapeHtml(result.fecha_corte_detectada || "")}">
       <p class="muted">
         Se detectó leyendo el encabezado del archivo, que suele traer la fecha de impresión.
-        Si exportaste hoy una cartera con corte anterior, corrígela aquí: el vencimiento y la
-        antigüedad se calculan contra esta fecha.
+        Si exportaste hoy una cartera con corte anterior, corrígela aquí: el vencimiento, la
+        antigüedad y el control de cambios se recalculan contra esta fecha.
       </p>
     </div>
     <div class="import-kpis">
@@ -1702,6 +1702,45 @@ function renderImportPreview(result) {
       </section>
     </div>
   `;
+  engancharRecalculoCorte();
+}
+
+// Al corregir la fecha de corte hay que recalcular la vista previa: el aging y
+// el control de cambios se calcularon contra la fecha detectada en el archivo,
+// y son justamente las cifras con las que se decide si confirmar o no.
+let recalcTimer = null;
+function engancharRecalculoCorte() {
+  const input = $("importFechaCorte");
+  if (!input) return;
+  input.addEventListener("change", () => {
+    const fecha = input.value;
+    if (!fecha || !importToken) return;
+    clearTimeout(recalcTimer);
+    recalcTimer = setTimeout(async () => {
+      const antes = input.value;
+      input.disabled = true;
+      status("Recalculando con la nueva fecha de corte…");
+      try {
+        const res = await fetch("/api/import/preview/recalc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: importToken, fecha_corte: fecha }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "No se pudo recalcular");
+        renderImportPreview(data);
+        // renderImportPreview redibuja el campo: hay que reponer el valor y
+        // volver a enganchar el listener sobre el input nuevo.
+        const nuevo = $("importFechaCorte");
+        if (nuevo) nuevo.value = antes;
+        engancharRecalculoCorte();
+        status(`Cifras recalculadas al corte ${fecha}`);
+      } catch (err) {
+        input.disabled = false;
+        status(err.message);
+      }
+    }, 250);
+  });
 }
 
 function rerenderFilteredViews() {
