@@ -1669,6 +1669,15 @@ function renderImportPreview(result) {
       </div>
       <strong>Aprobado</strong>
     </div>
+    <div class="import-corte">
+      <label for="importFechaCorte">Fecha de corte de la cartera</label>
+      <input type="date" id="importFechaCorte" value="${escapeHtml(result.fecha_corte_detectada || "")}">
+      <p class="muted">
+        Se detectó leyendo el encabezado del archivo, que suele traer la fecha de impresión.
+        Si exportaste hoy una cartera con corte anterior, corrígela aquí: el vencimiento y la
+        antigüedad se calculan contra esta fecha.
+      </p>
+    </div>
     <div class="import-kpis">
       <article><span>Saldo total</span><strong>${moneyM(result.saldo_total)}</strong></article>
       <article><span>Facturas</span><strong>${number.format(result.facturas || 0)}</strong></article>
@@ -2726,10 +2735,14 @@ async function confirmImport() {
   $("confirmImportBtn").disabled = true;
   $("confirmImportBtn").textContent = "Actualizando base de datos…";
   try {
+    const fechaCorte = ($("importFechaCorte") || {}).value || "";
+    if (!fechaCorte) {
+      throw new Error("Confirma la fecha de corte de la cartera antes de importar.");
+    }
     const res = await fetch("/api/import/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: importToken }),
+      body: JSON.stringify({ token: importToken, fecha_corte: fechaCorte }),
     });
     const result = await res.json();
     if (!res.ok) throw new Error(result.error || "Error en importación");

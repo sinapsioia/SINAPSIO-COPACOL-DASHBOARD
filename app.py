@@ -174,7 +174,7 @@ def extract_multipart_file(body: bytes, content_type: str) -> tuple[bytes | None
     return None, "cartera-siigo.xlsx"
 
 
-def send_file_to_n8n(file_bytes: bytes, filename: str) -> dict:
+def send_file_to_n8n(file_bytes: bytes, filename: str, fecha_corte: str = "") -> dict:
     if not N8N_IMPORT_WEBHOOK_URL:
         raise RuntimeError("La conexión de actualización de base de datos no está configurada.")
 
@@ -186,7 +186,17 @@ def send_file_to_n8n(file_bytes: bytes, filename: str) -> dict:
         f"Content-Type: {content_type}",
         "",
     ]
-    body = "\r\n".join(parts).encode("utf-8") + b"\r\n" + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    body = "\r\n".join(parts).encode("utf-8") + b"\r\n" + file_bytes + b"\r\n"
+    # La fecha de corte confirmada por el usuario viaja como campo aparte. n8n la
+    # usa en vez de adivinarla leyendo la primera fecha del encabezado del Excel,
+    # que es la fecha de impresion y no la del cierre.
+    if fecha_corte:
+        body += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="fecha_corte"\r\n\r\n'
+            f"{fecha_corte}\r\n"
+        ).encode("utf-8")
+    body += f"--{boundary}--\r\n".encode("utf-8")
     headers = {
         "Content-Type": f"multipart/form-data; boundary={boundary}",
         "Accept": "application/json",
@@ -1939,7 +1949,18 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
     status_over90 = "green" if (over_90 / total_saldo if total_saldo else 0) < 0.03 else "red"
 
     weekly_trend = build_weekly_trend(import_batches)
-    prior_batch_id = import_batches[1].get("id") if len(import_batches) > 1 else None
+    # El corte anterior se busca por fecha de corte, no por orden de importacion:
+    # una carga puede subirse fuera de orden (el 14 de julio se importo despues
+    # del 5 de agosto) y comparar contra el lote previo daria un delta al reves.
+    corte_actual = str(latest_batch.get("fecha_corte") or "")
+    prior_batch_id = next(
+        (
+            c["import_batch_id"]
+            for c in cortes_disponibles
+            if c["fecha_corte"] and corte_actual and c["fecha_corte"] < corte_actual
+        ),
+        None,
+    )
     clientes_deterioro = build_clientes_deterioro(enriched_clients, prior_batch_id)
     promesas_resumen = build_promesas_resumen(promises, payments)
     overdue_clients_list = [client for client in operational_clients if money(client.get("total_vencido")) > 0]
@@ -2179,11 +2200,14 @@ def build_promesas_module_payload(status: str | None = None) -> dict:
         "created_at.desc",
         page_size=500,
     )
-    clients = fetch_all(
+    # Acotado al lote vigente: con historia retenida el mismo NIT aparece una vez
+    # por corte, y el client_lookup de abajo se quedaria con una fila cualquiera.
+    # Compromisos mostraria entonces el vencido de un corte viejo.
+    clients, _ = fetch_batch_scoped(
         "copacol_clients",
-        "nit,razon_social,asesor_codigo,asesor_nombre,telefono,total_saldo,total_vencido,dias_mora_max",
+        "nit,razon_social,asesor_codigo,asesor_nombre,telefono,total_saldo,total_vencido,dias_mora_max,import_batch_id",
         "razon_social.asc",
-        page_size=2000,
+        latest_completed_import_batch_id(),
     )
     overrides = advisor_overrides_by_nit()
     if overrides:
@@ -3135,7 +3159,7 @@ def local_assistant_answer(question: str, ctx: dict) -> str:
     return "Puedo ayudarte con cartera, cobranzas, clientes, asesores, facturas vencidas y prioridades del dashboard. Con los datos actuales, la acción más útil es priorizar clientes por saldo vencido, días de mora y asesor responsable."
 
 
-def confirm_import(token: str) -> dict:
+def confirm_import(token: str, fecha_corte: str = "") -> dict:
     entry = IMPORT_CACHE.get(token)
     if not entry:
         raise ValueError("Token de importación inválido o expirado.")
@@ -3144,7 +3168,16 @@ def confirm_import(token: str) -> dict:
     if not file_bytes:
         raise ValueError("El archivo original ya no está disponible para actualizar la base de datos. Vuelve a validar el XLSX.")
 
-    result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx")
+    fecha_corte = (fecha_corte or "").strip() or str(entry.get("fecha_corte") or "")
+    if fecha_corte and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha_corte):
+        raise ValueError("La fecha de corte debe tener el formato AAAA-MM-DD.")
+    if fecha_corte:
+        try:
+            datetime.fromisoformat(fecha_corte)
+        except ValueError:
+            raise ValueError("La fecha de corte no es una fecha válida.") from None
+
+    result = send_file_to_n8n(file_bytes, entry.get("filename") or "cartera-siigo.xlsx", fecha_corte)
     del IMPORT_CACHE[token]
     if isinstance(result, list):
         result = result[0] if result else {"status": "accepted"}
@@ -3787,7 +3820,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
-                json_response(self, 200, confirm_import(data.get("token", "")))
+                json_response(self, 200, confirm_import(data.get("token", ""), data.get("fecha_corte", "")))
             except Exception as exc:
                 json_response(self, 400, {"error": str(exc)})
             return

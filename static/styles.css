@@ -2003,3 +2003,20 @@ input[type="file"] {
   background: #3b2600; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .drawer-action-btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ── Fecha de corte en la validación de carga ───────────────────────────── */
+.import-corte {
+  margin: 14px 0; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface-2, #fafaf8);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.import-corte label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ink-3);
+}
+.import-corte input {
+  padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink-1); font-size: 14px; max-width: 220px;
+}
+.import-corte input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-50); outline: none; }
+.import-corte .muted { margin: 0; font-size: 12px; line-height: 1.45; }
