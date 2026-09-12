@@ -1539,6 +1539,10 @@ def build_dashboard_payload(fecha_corte: str | None = None) -> dict:
         condition_key, condition_plazo = resolve_client_condition(
             client, condition_key, (credit_term or {}).get("plazo_pago_real")
         )
+        # El override de condicion mueve el vencimiento, no solo la etiqueta. Va
+        # antes de leer dias_mora: aging, matriz por asesor, client_stats y los KPIs
+        # se calculan todos a partir de este mismo valor.
+        invoice = reprice_invoice_due_date(invoice, manual_condition_plazo(client), latest_cut)
         amount = money(invoice.get("monto"))
         if amount < 0:
             saldos_a_favor += abs(amount)
@@ -2439,6 +2443,18 @@ CONDICIONES_VALIDAS = {"contado", "credito_45d", "credito_60d"}
 CONDICION_PLAZO_DIAS = {"contado": 1, "credito_45d": 45, "credito_60d": 60}
 
 
+def manual_condition_plazo(row: dict) -> int | None:
+    """Plazo en dias del override manual de condicion, o None si no hay override.
+
+    Se usa para dos cosas distintas: mostrar el plazo en la ficha y recalcular el
+    vencimiento de las facturas. Vive aparte para que ambas usen la misma regla.
+    """
+    manual = row.get("condicion_pago")
+    if row.get("tiene_override_condicion") and manual in CONDICIONES_VALIDAS:
+        return CONDICION_PLAZO_DIAS[manual]
+    return None
+
+
 def resolve_client_condition(row: dict, term_key: str | None, term_plazo) -> tuple[str, object]:
     """Condicion y plazo efectivos de un cliente.
 
@@ -2446,10 +2462,50 @@ def resolve_client_condition(row: dict, term_key: str | None, term_plazo) -> tup
     la condicion a mano desde el dashboard ese override gana. Sin esto la ficha
     seguia mostrando la condicion del maestro despues de guardar.
     """
-    manual = row.get("condicion_pago")
-    if row.get("tiene_override_condicion") and manual in CONDICIONES_VALIDAS:
-        return manual, CONDICION_PLAZO_DIAS[manual]
+    plazo = manual_condition_plazo(row)
+    if plazo is not None:
+        return row.get("condicion_pago"), plazo
     return (term_key or "sin_condicion_real"), term_plazo
+
+
+def reprice_invoice_due_date(invoice: dict, plazo: int | None, fecha_corte: str | None = None) -> dict:
+    """Recalcula vencimiento y mora de una factura contra un plazo nuevo.
+
+    El override manual de condicion solo cambiaba la etiqueta. fecha_vencimiento y
+    dias_mora seguian siendo los que la carga de Siigo calculo con la condicion
+    vieja, asi que un cliente corregido de contado a 60 dias seguia apareciendo
+    vencido con el vencimiento de contado (emision + 1 dia).
+
+    Caso real (FERRETERIA MILENIUM SAS, NIT 902029113): emitida el 2026-07-15,
+    vencia el 2026-07-16 con 35 dias de mora. A 60 dias vence el 2026-09-13, o sea
+    que a esa misma fecha de corte todavia esta vigente, no vencida a 31-60 dias.
+
+    Solo toca la factura cuando el plazo nuevo mueve la fecha: sin override, o con
+    un plazo que da el mismo vencimiento, devuelve la factura intacta.
+    """
+    if plazo is None:
+        return invoice
+    nueva_venc = add_days(invoice.get("fecha_emision"), plazo)
+    if not nueva_venc:
+        return invoice
+    venc_archivo = invoice.get("fecha_vencimiento")
+    if nueva_venc == venc_archivo:
+        return invoice
+    dias_archivo = money(invoice.get("dias_mora"))
+    # Sin fecha de corte explicita se reconstruye del par guardado: la carga
+    # calculo dias_mora como (corte - vencimiento), asi que corte = venc + dias.
+    corte = fecha_corte or add_days(venc_archivo, int(dias_archivo))
+    dias = days_between(nueva_venc, corte)
+    if dias is None:
+        return invoice
+    return {
+        **invoice,
+        "fecha_vencimiento": nueva_venc,
+        "dias_mora": dias,
+        "fecha_vencimiento_archivo": venc_archivo,
+        "dias_mora_archivo": dias_archivo,
+        "vencimiento_recalculado": True,
+    }
 
 
 def condition_overrides_by_nit() -> dict[str, dict]:
@@ -2941,9 +2997,11 @@ def build_client_payload(nit: str, fecha_corte: str | None = None) -> dict:
             "cupo_credito": credit_term.get("cupo_credito"),
             "observacion_credito": credit_term.get("observacion"),
         }
+    corte_cliente = str((client or {}).get("fecha_corte") or "") or None
+    plazo_override = manual_condition_plazo(client or {})
     invoices = [
         {
-            **invoice,
+            **reprice_invoice_due_date(invoice, plazo_override, corte_cliente),
             "condicion_pago_real": "saldos_a_favor" if money(invoice.get("monto")) < 0 else condition_key,
             "plazo_pago_real": plazo_real,
             "cupo_credito": credit_term.get("cupo_credito"),
@@ -2951,6 +3009,20 @@ def build_client_payload(nit: str, fecha_corte: str | None = None) -> dict:
         }
         for invoice in invoices
     ]
+    # Si el override movio algun vencimiento, los totales guardados del cliente
+    # quedaron calculados con la condicion vieja. Rehacerlos desde las facturas ya
+    # recalculadas: la ficha los muestra y build_whatsapp_payload los cobra.
+    if client and any(invoice.get("vencimiento_recalculado") for invoice in invoices):
+        vencidas = [inv for inv in invoices if money(inv.get("dias_mora")) > 0]
+        vencido = sum(money(inv.get("monto")) for inv in vencidas)
+        client = {
+            **client,
+            "total_vencido": vencido,
+            "total_vigente": money(client.get("total_saldo")) - vencido,
+            "num_vencidas": len(vencidas),
+            "dias_mora_max": max((money(inv.get("dias_mora")) for inv in vencidas), default=0),
+            "totales_recalculados": True,
+        }
 
     promise_params = urllib.parse.urlencode({"nit": f"eq.{nit}", "limit": "20", "order": "created_at.desc"})
     promises = supabase_get("copacol_promesas_pago", f"select=*&{promise_params}")
