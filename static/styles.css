@@ -230,6 +230,21 @@ body {
   border-top: none;
   padding-top: 0;
 }
+.sinapsio-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--brand-500);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.sinapsio-link svg { width: 16px; height: 16px; }
+.sinapsio-link:hover { background: rgba(255,255,255,.85); }
 .status-pill {
   display: flex;
   align-items: center;
